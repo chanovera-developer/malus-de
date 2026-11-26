@@ -19,6 +19,49 @@ use std::time::Instant;
 use tracing::info;
 
 pub const SQUIRCLE_EXPONENT: f64 = 4.2;
+pub const TOOLBAR_WIDTH: f64 = 484.0;
+pub const TOOLBAR_HEIGHT: f64 = 44.0;
+pub const TOOLBAR_RADIUS: f64 = 22.0; // Cápsula squircle a altura de 44 px (44 / 2 = 22 px)
+pub const TOOLBAR_PADDING: f64 = 6.0;
+pub const ACTION_BTN_RADIUS: f64 = TOOLBAR_RADIUS - TOOLBAR_PADDING; // 16.0 px concéntrico al contorno de 22 px
+const MIN_SELECTION_SIZE: f64 = 10.0;
+const MIN_RESIZE_HANDLE_SIZE: f64 = 24.0;
+
+fn clamp_selection_to_bounds(area: SelectionArea, sw: f64, sh: f64) -> SelectionArea {
+    let sw = if sw.is_finite() && sw > 0.0 { sw } else { 1.0 };
+    let sh = if sh.is_finite() && sh > 0.0 { sh } else { 1.0 };
+    let min_w = MIN_SELECTION_SIZE.min(sw);
+    let min_h = MIN_SELECTION_SIZE.min(sh);
+
+    let raw_x = if area.x.is_finite() { area.x } else { 0.0 };
+    let raw_y = if area.y.is_finite() { area.y } else { 0.0 };
+    let raw_w = if area.width.is_finite() {
+        area.width
+    } else {
+        min_w
+    };
+    let raw_h = if area.height.is_finite() {
+        area.height
+    } else {
+        min_h
+    };
+
+    let max_x = (sw - min_w).max(0.0);
+    let max_y = (sh - min_h).max(0.0);
+    let x = raw_x.clamp(0.0, max_x);
+    let y = raw_y.clamp(0.0, max_y);
+    let max_w = (sw - x).max(min_w);
+    let max_h = (sh - y).max(min_h);
+    let width = raw_w.clamp(min_w, max_w);
+    let height = raw_h.clamp(min_h, max_h);
+
+    SelectionArea {
+        x,
+        y,
+        width,
+        height,
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScreenshotPointerResult {
@@ -60,6 +103,7 @@ pub struct UiOptions {
     pub timer_seconds: u32,
     pub remember_selection: bool,
     pub include_audio: bool,
+    pub lossless: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,6 +136,7 @@ pub struct ScreenshotUiState {
     pub show_options_menu: bool,
     pub target_output: Option<String>,
     pub selection: SelectionArea,
+    pub hovered_window_rect: Option<Rectangle<i32, Logical>>,
     pub is_recording: bool,
     pub recording_start: Option<Instant>,
     pub recording_dest: Option<PathBuf>,
@@ -100,8 +145,8 @@ pub struct ScreenshotUiState {
     active_handle: HandleType,
     drag_start_pointer: (f64, f64),
     drag_start_area: SelectionArea,
-    hovered_item: Option<u8>, // 0: Cerrar, 1..5: Modos, 6: Opciones, 7: Acción, 8: Parar Grabación
-    hovered_menu_item: Option<usize>, // 0..8 para el menú emergente
+    hovered_item: Option<u8>, // 0: Cerrar, 1..5: Modos, 6: Opciones, 7: Acción, 8: Sin pérdidas
+    hovered_menu_item: Option<usize>, // 0..9 para el menú emergente
 
     // Buffers de renderizado del compositor
     render_buffer: Option<MemoryRenderBuffer>,
@@ -121,6 +166,7 @@ impl ScreenshotUiState {
                 timer_seconds: 0,
                 remember_selection: true,
                 include_audio: false,
+                lossless: false,
             },
             show_options_menu: false,
             target_output: None,
@@ -130,6 +176,7 @@ impl ScreenshotUiState {
                 width: 800.0,
                 height: 520.0,
             },
+            hovered_window_rect: None,
             is_recording: false,
             recording_start: None,
             recording_dest: None,
@@ -152,7 +199,7 @@ impl ScreenshotUiState {
     }
 
     pub fn is_open(&self) -> bool {
-        self.is_open || self.is_recording
+        self.is_open
     }
 
     pub fn open(&mut self, output_geo: Rectangle<i32, Logical>, output_name: String) {
@@ -160,40 +207,68 @@ impl ScreenshotUiState {
         self.target_output = Some(output_name);
         self.show_options_menu = false;
         self.hovered_menu_item = None;
+        self.hovered_window_rect = None;
 
-        let sw = output_geo.size.w as f64;
-        let sh = output_geo.size.h as f64;
+        let sw = (output_geo.size.w as f64).max(1.0);
+        let sh = (output_geo.size.h as f64).max(1.0);
+        let min_w = MIN_SELECTION_SIZE.min(sw);
+        let min_h = MIN_SELECTION_SIZE.min(sh);
 
-        if !self.options.remember_selection
-            || self.selection.width <= 10.0
-            || self.selection.height <= 10.0
-        {
-            let init_w = (sw * 0.55).min(960.0).max(320.0);
-            let init_h = (sh * 0.50).min(640.0).max(240.0);
+        let selection_invalid_or_offscreen = !self.selection.x.is_finite()
+            || !self.selection.y.is_finite()
+            || !self.selection.width.is_finite()
+            || !self.selection.height.is_finite()
+            || self.selection.width <= min_w
+            || self.selection.height <= min_h
+            || self.selection.x >= sw - min_w
+            || self.selection.y >= sh - min_h
+            || self.selection.x + self.selection.width <= min_w
+            || self.selection.y + self.selection.height <= min_h;
+
+        if !self.options.remember_selection || selection_invalid_or_offscreen {
+            let init_w = (sw * 0.55).min(960.0).max(320.0).min(sw);
+            let init_h = (sh * 0.50).min(640.0).max(240.0).min(sh);
             self.selection = SelectionArea {
-                x: ((sw - init_w) * 0.5).round(),
-                y: ((sh - init_h) * 0.5 - 20.0).max(40.0).round(),
+                x: ((sw - init_w) * 0.5).max(0.0).round(),
+                y: ((sh - init_h) * 0.5 - 20.0)
+                    .max(40.0)
+                    .min((sh - init_h).max(0.0))
+                    .round(),
                 width: init_w.round(),
                 height: init_h.round(),
             };
         }
+        self.selection = clamp_selection_to_bounds(self.selection, sw, sh);
         info!("📸 Barra de captura squircle abierta en pantalla {}", sw);
+    }
+
+    pub fn clamped_selection(&self, output_geo: Rectangle<i32, Logical>) -> SelectionArea {
+        clamp_selection_to_bounds(
+            self.selection,
+            output_geo.size.w as f64,
+            output_geo.size.h as f64,
+        )
     }
 
     pub fn close(&mut self) {
         self.is_open = false;
         self.show_options_menu = false;
         self.hovered_menu_item = None;
+        self.hovered_window_rect = None;
         self.active_handle = HandleType::None;
         info!("📸 Barra de captura cerrada");
     }
 
     pub fn should_render_on_output(&self, output_name: &str) -> bool {
-        self.is_open()
+        self.is_open
             && self
                 .target_output
                 .as_deref()
                 .map_or(true, |target| target == output_name)
+    }
+
+    pub fn update_hovered_window(&mut self, rect: Option<Rectangle<i32, Logical>>) {
+        self.hovered_window_rect = rect;
     }
 
     pub fn update_pointer_motion(
@@ -201,7 +276,7 @@ impl ScreenshotUiState {
         output_geo: Rectangle<i32, Logical>,
         point: Point<f64, Logical>,
     ) {
-        if !self.is_open() {
+        if !self.is_open {
             return;
         }
 
@@ -209,14 +284,7 @@ impl ScreenshotUiState {
         let ly = point.y - output_geo.loc.y as f64;
         let sw = output_geo.size.w as f64;
         let sh = output_geo.size.h as f64;
-
-        if self.is_recording {
-            let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
-            if lx >= rx && lx <= rx + rw && ly >= ry && ly <= ry + rh {
-                self.hovered_item = Some(8);
-            } else {
-                self.hovered_item = None;
-            }
+        if sw <= 0.0 || sh <= 0.0 {
             return;
         }
 
@@ -224,7 +292,15 @@ impl ScreenshotUiState {
         if self.active_handle != HandleType::None {
             let offset_x = lx - self.drag_start_pointer.0;
             let offset_y = ly - self.drag_start_pointer.1;
-            let orig = self.drag_start_area;
+            let orig = clamp_selection_to_bounds(self.drag_start_area, sw, sh);
+            let right = (orig.x + orig.width).clamp(0.0, sw);
+            let bottom = (orig.y + orig.height).clamp(0.0, sh);
+            let max_left_x = (right - MIN_RESIZE_HANDLE_SIZE).max(0.0);
+            let max_top_y = (bottom - MIN_RESIZE_HANDLE_SIZE).max(0.0);
+            let avail_w = (sw - orig.x).max(0.0);
+            let avail_h = (sh - orig.y).max(0.0);
+            let min_resize_w = MIN_RESIZE_HANDLE_SIZE.min(avail_w);
+            let min_resize_h = MIN_RESIZE_HANDLE_SIZE.min(avail_h);
 
             match self.active_handle {
                 HandleType::MoveBox => {
@@ -232,66 +308,61 @@ impl ScreenshotUiState {
                     self.selection.y = (orig.y + offset_y).clamp(0.0, (sh - orig.height).max(0.0));
                 }
                 HandleType::NewSelection => {
-                    let sx = self.drag_start_pointer.0;
-                    let sy = self.drag_start_pointer.1;
+                    let sx = self.drag_start_pointer.0.clamp(0.0, sw);
+                    let sy = self.drag_start_pointer.1.clamp(0.0, sh);
                     let cur_x = lx.clamp(0.0, sw);
                     let cur_y = ly.clamp(0.0, sh);
                     self.selection = SelectionArea {
                         x: sx.min(cur_x),
                         y: sy.min(cur_y),
-                        width: (sx - cur_x).abs().max(10.0),
-                        height: (sy - cur_y).abs().max(10.0),
+                        width: (sx - cur_x).abs().max(MIN_SELECTION_SIZE),
+                        height: (sy - cur_y).abs().max(MIN_SELECTION_SIZE),
                     };
                 }
                 HandleType::NorthWest => {
-                    let right = orig.x + orig.width;
-                    let bottom = orig.y + orig.height;
-                    let new_x = (orig.x + offset_x).clamp(0.0, right - 24.0);
-                    let new_y = (orig.y + offset_y).clamp(0.0, bottom - 24.0);
+                    let new_x = (orig.x + offset_x).clamp(0.0, max_left_x);
+                    let new_y = (orig.y + offset_y).clamp(0.0, max_top_y);
                     self.selection.x = new_x;
                     self.selection.y = new_y;
-                    self.selection.width = right - new_x;
-                    self.selection.height = bottom - new_y;
+                    self.selection.width = (right - new_x).max(MIN_SELECTION_SIZE.min(sw));
+                    self.selection.height = (bottom - new_y).max(MIN_SELECTION_SIZE.min(sh));
                 }
                 HandleType::North => {
-                    let bottom = orig.y + orig.height;
-                    let new_y = (orig.y + offset_y).clamp(0.0, bottom - 24.0);
+                    let new_y = (orig.y + offset_y).clamp(0.0, max_top_y);
                     self.selection.y = new_y;
-                    self.selection.height = bottom - new_y;
+                    self.selection.height = (bottom - new_y).max(MIN_SELECTION_SIZE.min(sh));
                 }
                 HandleType::NorthEast => {
-                    let bottom = orig.y + orig.height;
-                    let new_y = (orig.y + offset_y).clamp(0.0, bottom - 24.0);
-                    let new_w = (orig.width + offset_x).clamp(24.0, sw - orig.x);
+                    let new_y = (orig.y + offset_y).clamp(0.0, max_top_y);
+                    let new_w = (orig.width + offset_x).clamp(min_resize_w, avail_w);
                     self.selection.y = new_y;
-                    self.selection.height = bottom - new_y;
+                    self.selection.height = (bottom - new_y).max(MIN_SELECTION_SIZE.min(sh));
                     self.selection.width = new_w;
                 }
                 HandleType::East => {
-                    self.selection.width = (orig.width + offset_x).clamp(24.0, sw - orig.x);
+                    self.selection.width = (orig.width + offset_x).clamp(min_resize_w, avail_w);
                 }
                 HandleType::SouthEast => {
-                    self.selection.width = (orig.width + offset_x).clamp(24.0, sw - orig.x);
-                    self.selection.height = (orig.height + offset_y).clamp(24.0, sh - orig.y);
+                    self.selection.width = (orig.width + offset_x).clamp(min_resize_w, avail_w);
+                    self.selection.height = (orig.height + offset_y).clamp(min_resize_h, avail_h);
                 }
                 HandleType::South => {
-                    self.selection.height = (orig.height + offset_y).clamp(24.0, sh - orig.y);
+                    self.selection.height = (orig.height + offset_y).clamp(min_resize_h, avail_h);
                 }
                 HandleType::SouthWest => {
-                    let right = orig.x + orig.width;
-                    let new_x = (orig.x + offset_x).clamp(0.0, right - 24.0);
+                    let new_x = (orig.x + offset_x).clamp(0.0, max_left_x);
                     self.selection.x = new_x;
-                    self.selection.width = right - new_x;
-                    self.selection.height = (orig.height + offset_y).clamp(24.0, sh - orig.y);
+                    self.selection.width = (right - new_x).max(MIN_SELECTION_SIZE.min(sw));
+                    self.selection.height = (orig.height + offset_y).clamp(min_resize_h, avail_h);
                 }
                 HandleType::West => {
-                    let right = orig.x + orig.width;
-                    let new_x = (orig.x + offset_x).clamp(0.0, right - 24.0);
+                    let new_x = (orig.x + offset_x).clamp(0.0, max_left_x);
                     self.selection.x = new_x;
-                    self.selection.width = right - new_x;
+                    self.selection.width = (right - new_x).max(MIN_SELECTION_SIZE.min(sw));
                 }
                 HandleType::None => {}
             }
+            self.selection = clamp_selection_to_bounds(self.selection, sw, sh);
             return;
         }
 
@@ -307,7 +378,7 @@ impl ScreenshotUiState {
             }
         }
 
-        // Detección de elementos interactivos de la barra flotante
+        // Detección de elementos interactivos de la barra flotante (484 × 44, radio 22 px)
         let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
         if lx >= tb_x && lx <= tb_x + tb_w && ly >= tb_y && ly <= tb_y + tb_h {
             let rel_x = lx - tb_x;
@@ -331,6 +402,15 @@ impl ScreenshotUiState {
             return;
         }
 
+        // Botón auxiliar flotante "Sin pérdidas" (solo visible en modos de grabación)
+        if self.mode.is_video() {
+            let (lx_p, ly_p, lw_p, lh_p) = lossless_pill_geometry(sw, sh);
+            if lx >= lx_p && lx <= lx_p + lw_p && ly >= ly_p && ly <= ly_p + lh_p {
+                self.hovered_item = Some(8);
+                return;
+            }
+        }
+
         self.hovered_item = None;
     }
 
@@ -341,7 +421,7 @@ impl ScreenshotUiState {
         _button: u32,
         state: smithay::backend::input::ButtonState,
     ) -> ScreenshotPointerResult {
-        if !self.is_open() {
+        if !self.is_open {
             return ScreenshotPointerResult::Ignored;
         }
 
@@ -361,14 +441,10 @@ impl ScreenshotUiState {
             };
         }
 
-        // Si está grabando y pulsa el botón de detener
-        if self.is_recording {
-            let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
-            if lx >= rx && lx <= rx + rw && ly >= ry && ly <= ry + rh {
-                self.is_recording = false;
-                self.recording_start = None;
-                return ScreenshotPointerResult::TriggerAction;
-            }
+        // Ignorar clics fuera del monitor donde está abierta la barra (p. ej. en otro monitor)
+        if sw <= 0.0 || sh <= 0.0 || lx < 0.0 || lx > sw || ly < 0.0 || ly > sh {
+            self.show_options_menu = false;
+            self.hovered_menu_item = None;
             return ScreenshotPointerResult::Ignored;
         }
 
@@ -387,6 +463,7 @@ impl ScreenshotUiState {
                         6 => self.options.timer_seconds = 10,
                         7 => self.options.remember_selection = !self.options.remember_selection,
                         8 => self.options.include_audio = !self.options.include_audio,
+                        9 => self.options.lossless = !self.options.lossless,
                         _ => {}
                     }
                 }
@@ -397,7 +474,7 @@ impl ScreenshotUiState {
             }
         }
 
-        // 2. Clic dentro de la barra de herramientas
+        // 2. Clic dentro de la barra de herramientas (484 × 44, radio 22 px)
         let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
         if lx >= tb_x && lx <= tb_x + tb_w && ly >= tb_y && ly <= tb_y + tb_h {
             let rel_x = lx - tb_x;
@@ -435,6 +512,21 @@ impl ScreenshotUiState {
             }
         }
 
+        // 2b. Clic en el botón flotante "Sin pérdidas" (solo en modos de grabación)
+        if self.mode.is_video() {
+            let (lx_p, ly_p, lw_p, lh_p) = lossless_pill_geometry(sw, sh);
+            if lx >= lx_p && lx <= lx_p + lw_p && ly >= ly_p && ly <= ly_p + lh_p {
+                self.options.lossless = !self.options.lossless;
+                return ScreenshotPointerResult::Consumed;
+            }
+        }
+
+        // En modo Capturar Ventana, un clic fuera de la barra captura la ventana bajo el puntero
+        if self.mode == ScreenshotUiMode::CaptureWindow {
+            self.show_options_menu = false;
+            return ScreenshotPointerResult::TriggerAction;
+        }
+
         // 3. Clic para ajustar área de recorte (tiradores o arrastre)
         if self.mode.is_area() {
             let r = self.selection;
@@ -465,18 +557,22 @@ impl ScreenshotUiState {
                     matched = HandleType::MoveBox;
                 } else {
                     matched = HandleType::NewSelection;
-                    self.selection = SelectionArea {
-                        x: lx,
-                        y: ly,
-                        width: 4.0,
-                        height: 4.0,
-                    };
+                    self.selection = clamp_selection_to_bounds(
+                        SelectionArea {
+                            x: lx,
+                            y: ly,
+                            width: MIN_SELECTION_SIZE,
+                            height: MIN_SELECTION_SIZE,
+                        },
+                        sw,
+                        sh,
+                    );
                 }
             }
 
             self.active_handle = matched;
-            self.drag_start_pointer = (lx, ly);
-            self.drag_start_area = self.selection;
+            self.drag_start_pointer = (lx.clamp(0.0, sw), ly.clamp(0.0, sh));
+            self.drag_start_area = clamp_selection_to_bounds(self.selection, sw, sh);
             return ScreenshotPointerResult::Consumed;
         }
 
@@ -484,18 +580,13 @@ impl ScreenshotUiState {
     }
 
     pub fn handle_key_press(&mut self, sym: Keysym, _modifiers: ModifiersState) -> bool {
-        if !self.is_open() {
+        if !self.is_open {
             return false;
         }
 
         if sym == keysyms::KEY_Escape.into() {
-            if self.is_recording {
-                self.is_recording = false;
-                self.recording_start = None;
-            } else {
-                self.close();
-            }
-            return true;
+            self.close();
+            return false;
         }
 
         if sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into() {
@@ -512,88 +603,56 @@ impl ScreenshotUiState {
         scale: f64,
         is_dark: bool,
     ) -> Option<(Rectangle<i32, Physical>, Option<&[u8]>, (i32, i32), f32)> {
-        if !self.is_open() {
+        if !self.is_open {
             return None;
         }
 
         let sw = output_geo.size.w as f64;
         let sh = output_geo.size.h as f64;
-        let full_phys_w = (sw * scale).round() as i32;
-        let full_phys_h = (sh * scale).round() as i32;
+        let phys_w = (sw * scale).round() as i32;
+        let phys_h = (sh * scale).round() as i32;
 
-        if full_phys_w <= 0 || full_phys_h <= 0 {
+        if phys_w <= 0 || phys_h <= 0 {
             return None;
         }
 
-        // Cuando solo está visible la píldora indicadora de grabación, rasterizar únicamente su
-        // rectángulo compacto (~166x72 lógicos) en vez de dos superficies Cairo de pantalla completa.
-        let (origin_x, origin_y, canvas_w, canvas_h, phys_loc, phys_w, phys_h) = if self.is_recording
-        {
-            let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
-            let pad = 20.0;
-            let lx = (rx - pad).max(0.0).floor();
-            let ly = (ry - pad).max(0.0).floor();
-            let lw = (rw + pad * 2.0).min(sw - lx).ceil().max(2.0);
-            let lh = (rh + pad * 2.0).min(sh - ly).ceil().max(2.0);
-            let px = (lx * scale).round() as i32;
-            let py = (ly * scale).round() as i32;
-            let pw = (lw * scale).round().max(2.0) as i32;
-            let ph = (lh * scale).round().max(2.0) as i32;
-            (lx, ly, lw, lh, Point::from((px, py)), pw, ph)
-        } else {
-            (
-                0.0,
-                0.0,
-                sw,
-                sh,
-                Point::from((0, 0)),
-                full_phys_w,
-                full_phys_h,
-            )
-        };
-
+        let phys_loc = Point::from((0, 0));
         let glass_scale = malus_de_common::config::current_liquid_glass_scale();
-        let (rec_secs, rec_pulse) = if self.is_recording {
-            let elapsed_ms = self
-                .recording_start
-                .map(|t| t.elapsed().as_millis())
-                .unwrap_or(0);
-            ((elapsed_ms / 1000) as u64, u64::from((elapsed_ms % 1000) < 500))
-        } else {
-            (0, 0)
-        };
+        let accent_idx = malus_de_common::config::load_accent_color_index() as u64;
 
         let mut sig = 1469598103934665603u64;
         let mix = |s: &mut u64, v: u64| {
             *s ^= v;
             *s = s.wrapping_mul(1099511628211);
         };
-        mix(&mut sig, u64::from(self.is_recording));
         mix(&mut sig, u64::from(is_dark));
+        mix(&mut sig, accent_idx);
         mix(&mut sig, (scale * 1000.0).round() as u64);
         mix(&mut sig, (glass_scale * 1000.0).round() as u64);
-        mix(&mut sig, phys_loc.x as u64);
-        mix(&mut sig, phys_loc.y as u64);
         mix(&mut sig, phys_w as u64);
         mix(&mut sig, phys_h as u64);
         mix(&mut sig, self.hovered_item.unwrap_or(99) as u64);
-        if self.is_recording {
-            mix(&mut sig, rec_secs);
-            mix(&mut sig, rec_pulse);
+        mix(&mut sig, self.mode as u64);
+        mix(&mut sig, u64::from(self.show_options_menu));
+        mix(&mut sig, self.hovered_menu_item.unwrap_or(999) as u64);
+        mix(&mut sig, self.options.save_to as u64);
+        mix(&mut sig, u64::from(self.options.timer_seconds));
+        mix(&mut sig, u64::from(self.options.remember_selection));
+        mix(&mut sig, u64::from(self.options.include_audio));
+        mix(&mut sig, u64::from(self.options.lossless));
+        mix(&mut sig, (self.selection.x * 2.0).round() as i64 as u64);
+        mix(&mut sig, (self.selection.y * 2.0).round() as i64 as u64);
+        mix(&mut sig, (self.selection.width * 2.0).round() as i64 as u64);
+        mix(&mut sig, (self.selection.height * 2.0).round() as i64 as u64);
+        if let Some(wr) = self.hovered_window_rect {
+            mix(&mut sig, 1);
+            mix(&mut sig, wr.loc.x as i64 as u64);
+            mix(&mut sig, wr.loc.y as i64 as u64);
+            mix(&mut sig, wr.size.w as i64 as u64);
+            mix(&mut sig, wr.size.h as i64 as u64);
         } else {
-            mix(&mut sig, self.mode as u64);
-            mix(&mut sig, u64::from(self.show_options_menu));
-            mix(&mut sig, self.hovered_menu_item.unwrap_or(999) as u64);
-            mix(&mut sig, self.options.save_to as u64);
-            mix(&mut sig, u64::from(self.options.timer_seconds));
-            mix(&mut sig, u64::from(self.options.remember_selection));
-            mix(&mut sig, u64::from(self.options.include_audio));
-            mix(&mut sig, (self.selection.x * 2.0).round() as i64 as u64);
-            mix(&mut sig, (self.selection.y * 2.0).round() as i64 as u64);
-            mix(&mut sig, (self.selection.width * 2.0).round() as i64 as u64);
-            mix(&mut sig, (self.selection.height * 2.0).round() as i64 as u64);
+            mix(&mut sig, 0);
         }
-        let _ = (canvas_w, canvas_h);
 
         let rect = Rectangle::new(phys_loc, (phys_w, phys_h).into());
         if sig == self.last_render_signature
@@ -613,29 +672,26 @@ impl ScreenshotUiState {
             let mask_ctx = Context::new(&mask_surface).ok()?;
             ctx.scale(scale, scale);
             mask_ctx.scale(scale, scale);
-            if origin_x != 0.0 || origin_y != 0.0 {
-                ctx.translate(-origin_x, -origin_y);
-                mask_ctx.translate(-origin_x, -origin_y);
-            }
 
             mask_ctx.set_operator(Operator::Source);
             mask_ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);
             let _ = mask_ctx.paint();
             mask_ctx.set_operator(Operator::Over);
 
-            if self.is_recording {
-                self.draw_recording_indicator(&ctx, &mask_ctx, sw, is_dark);
-            } else {
-                // 1. Fondo oscurecido con recorte nítido para selección
-                self.draw_scrim_and_selection(&ctx, sw, sh);
+            // 1. Fondo oscurecido con recorte nítido para selección o ventana
+            self.draw_scrim_and_selection(&ctx, sw, sh);
 
-                // 2. Barra de herramientas flotante squircle
-                self.draw_toolbar(&ctx, &mask_ctx, sw, sh, is_dark);
+            // 2. Barra de herramientas flotante squircle (border-radius 22 px)
+            self.draw_toolbar(&ctx, &mask_ctx, sw, sh, is_dark);
 
-                // 3. Menú de opciones emergente squircle si está abierto
-                if self.show_options_menu {
-                    self.draw_options_menu(&ctx, &mask_ctx, sw, sh, is_dark);
-                }
+            // 2b. Botón auxiliar "Sin pérdidas" en modo de grabación de video
+            if self.mode.is_video() {
+                self.draw_lossless_pill(&ctx, &mask_ctx, sw, sh, is_dark);
+            }
+
+            // 3. Menú de opciones emergente squircle si está abierto
+            if self.show_options_menu {
+                self.draw_options_menu(&ctx, &mask_ctx, sw, sh, is_dark);
             }
         }
 
@@ -699,19 +755,37 @@ impl ScreenshotUiState {
                 let _ = ctx.paint();
             }
             ScreenshotUiMode::CaptureWindow => {
-                ctx.set_source_rgba(0.0, 0.0, 0.0, 0.32);
+                ctx.set_source_rgba(0.0, 0.0, 0.0, 0.28);
                 let _ = ctx.paint();
+                if let Some(wr) = self.hovered_window_rect {
+                    let min_w = 16.0_f64.min(sw).max(1.0);
+                    let min_h = 16.0_f64.min(sh).max(1.0);
+                    let rx = (wr.loc.x as f64).clamp(0.0, (sw - min_w).max(0.0));
+                    let ry = (wr.loc.y as f64).clamp(0.0, (sh - min_h).max(0.0));
+                    let rw = (wr.size.w as f64).clamp(min_w, (sw - rx).max(min_w));
+                    let rh = (wr.size.h as f64).clamp(min_h, (sh - ry).max(min_h));
+
+                    ctx.set_operator(Operator::Clear);
+                    path_squircle_rect(ctx, rx, ry, rw, rh, 14.0);
+                    let _ = ctx.fill();
+
+                    ctx.set_operator(Operator::Over);
+                    let (ar, ag, ab) = malus_de_common::config::load_accent_color();
+                    path_squircle_rect(ctx, rx, ry, rw, rh, 14.0);
+                    ctx.set_source_rgba(ar, ag, ab, 0.14);
+                    let _ = ctx.fill_preserve();
+                    ctx.set_source_rgba(ar, ag, ab, 0.90);
+                    ctx.set_line_width(2.5);
+                    let _ = ctx.stroke();
+                }
             }
             ScreenshotUiMode::CaptureArea | ScreenshotUiMode::RecordArea => {
                 // Fondo oscuro translúcido
                 ctx.set_source_rgba(0.0, 0.0, 0.0, 0.38);
                 let _ = ctx.paint();
 
-                let r = self.selection;
-                let rx = r.x.clamp(0.0, sw);
-                let ry = r.y.clamp(0.0, sh);
-                let rw = r.width.clamp(10.0, sw - rx);
-                let rh = r.height.clamp(10.0, sh - ry);
+                let r = clamp_selection_to_bounds(self.selection, sw, sh);
+                let (rx, ry, rw, rh) = (r.x, r.y, r.width, r.height);
 
                 // Recorte 100% transparente
                 ctx.set_operator(Operator::Clear);
@@ -765,7 +839,8 @@ impl ScreenshotUiState {
                     if by + bh > sh - 90.0 {
                         by = (ry - bh - 8.0).max(10.0);
                     }
-                    let bx = (rx + (rw - bw) * 0.5).clamp(10.0, sw - bw - 10.0);
+                    let max_bx = (sw - bw - 10.0).max(10.0);
+                    let bx = (rx + (rw - bw) * 0.5).clamp(10.0, max_bx);
 
                     path_squircle_rect(ctx, bx, by, bw, bh, 6.0);
                     ctx.set_source_rgba(0.10, 0.10, 0.12, 0.88);
@@ -781,9 +856,10 @@ impl ScreenshotUiState {
 
     fn draw_toolbar(&self, ctx: &Context, mask_ctx: &Context, sw: f64, sh: f64, is_dark: bool) {
         let (x, y, w, h) = toolbar_geometry(sw, sh);
-        let r = 14.0;
+        let r = TOOLBAR_RADIUS;
+        let cy = y + h * 0.5;
 
-        // Máscara para Dual-Kawase blur con geometría squircle exacta
+        // Máscara para Dual-Kawase blur con geometría squircle exacta (border-radius 32 px)
         path_squircle_rect(mask_ctx, x, y, w, h, r);
         mask_ctx.set_source_rgba(1.0, 1.0, 1.0, 1.0);
         let _ = mask_ctx.fill();
@@ -829,18 +905,18 @@ impl ScreenshotUiState {
             [0.12, 0.12, 0.14]
         };
 
-        // Botón Cerrar (✕ dentro de círculo)
+        // Botón Cerrar (✕ dentro de círculo concéntrico al extremo izquierdo de 22 px)
         draw_close_button(
             ctx,
             x + 22.0,
-            y + 22.0,
+            cy,
             self.hovered_item == Some(0),
             fg,
             is_dark,
         );
 
         // Separador 1
-        draw_v_sep(ctx, x + 44.0, y + 8.0, 28.0, is_dark);
+        draw_v_sep(ctx, x + 44.0, y + 8.0, h - 16.0, is_dark);
 
         // Modos de Foto: Pantalla, Ventana, Área
         let btn1_act = self.mode == ScreenshotUiMode::CaptureFull;
@@ -850,35 +926,35 @@ impl ScreenshotUiState {
         draw_mode_button_plate(
             ctx,
             x + 66.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             btn1_act,
             self.hovered_item == Some(1),
             is_dark,
         );
-        draw_monitor_icon(ctx, x + 66.0, y + 22.0, fg, false);
+        draw_monitor_icon(ctx, x + 66.0, cy, fg, false);
 
         draw_mode_button_plate(
             ctx,
             x + 110.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             btn2_act,
             self.hovered_item == Some(2),
             is_dark,
         );
-        draw_window_icon(ctx, x + 110.0, y + 22.0, fg);
+        draw_window_icon(ctx, x + 110.0, cy, fg);
 
         draw_mode_button_plate(
             ctx,
             x + 154.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             btn3_act,
             self.hovered_item == Some(3),
             is_dark,
         );
-        draw_marquee_icon(ctx, x + 154.0, y + 22.0, fg, false);
+        draw_marquee_icon(ctx, x + 154.0, cy, fg, false);
 
         // Separador 2
-        draw_v_sep(ctx, x + 176.0, y + 8.0, 28.0, is_dark);
+        draw_v_sep(ctx, x + 176.0, y + 8.0, h - 16.0, is_dark);
 
         // Modos de Video: Grabar Pantalla, Grabar Área
         let btn4_act = self.mode == ScreenshotUiMode::RecordFull;
@@ -887,34 +963,34 @@ impl ScreenshotUiState {
         draw_mode_button_plate(
             ctx,
             x + 199.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             btn4_act,
             self.hovered_item == Some(4),
             is_dark,
         );
-        draw_monitor_icon(ctx, x + 199.0, y + 22.0, fg, true);
+        draw_monitor_icon(ctx, x + 199.0, cy, fg, true);
 
         draw_mode_button_plate(
             ctx,
             x + 245.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             btn5_act,
             self.hovered_item == Some(5),
             is_dark,
         );
-        draw_marquee_icon(ctx, x + 245.0, y + 22.0, fg, true);
+        draw_marquee_icon(ctx, x + 245.0, cy, fg, true);
 
         // Separador 3
-        draw_v_sep(ctx, x + 268.0, y + 8.0, 28.0, is_dark);
+        draw_v_sep(ctx, x + 268.0, y + 8.0, h - 16.0, is_dark);
 
         // Botón Opciones ▾
         let opt_hov = self.hovered_item == Some(6);
         draw_options_button(
             ctx,
             x + 274.0,
-            y + 6.0,
+            y + TOOLBAR_PADDING,
             96.0,
-            32.0,
+            h - TOOLBAR_PADDING * 2.0,
             self.show_options_menu,
             opt_hov,
             fg,
@@ -922,25 +998,26 @@ impl ScreenshotUiState {
         );
 
         // Separador 4
-        draw_v_sep(ctx, x + 376.0, y + 8.0, 28.0, is_dark);
+        draw_v_sep(ctx, x + 376.0, y + 8.0, h - 16.0, is_dark);
 
-        // Botón de Acción Principal ("Capturar" o "Grabar")
-        let act_label = if self.mode.is_video() {
-            "Grabar"
-        } else {
-            "Capturar"
-        };
+        // Botón de Acción Principal ("Capturar" con color de énfasis / "Grabar")
+        // Radio concéntrico al borde externo de 22 px: 22 - 6 = 16 px.
+        let is_video = self.mode.is_video();
+        let act_label = if is_video { "Grabar" } else { "Capturar" };
         let act_hov = self.hovered_item == Some(7);
+        let act_x = x + 382.0;
+        let act_y = y + TOOLBAR_PADDING;
+        let act_w = w - 382.0 - TOOLBAR_PADDING;
+        let act_h = h - TOOLBAR_PADDING * 2.0;
         draw_action_button(
             ctx,
-            x + 382.0,
-            y + 6.0,
-            94.0,
-            32.0,
+            act_x,
+            act_y,
+            act_w,
+            act_h,
             act_label,
+            is_video,
             act_hov,
-            fg,
-            is_dark,
         );
     }
 
@@ -1043,6 +1120,7 @@ impl ScreenshotUiState {
         let opts = [
             (7, self.options.remember_selection, "Recordar selección"),
             (8, self.options.include_audio, "Grabar micrófono"),
+            (9, self.options.lossless, "Video sin pérdidas"),
         ];
         for (i, (item_idx, checked, label)) in opts.iter().enumerate() {
             let iy = y + 216.0 + i as f64 * 20.0;
@@ -1061,89 +1139,149 @@ impl ScreenshotUiState {
         }
     }
 
-    fn draw_recording_indicator(&self, ctx: &Context, mask_ctx: &Context, sw: f64, is_dark: bool) {
-        let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
-        let r = 14.0;
+    fn draw_lossless_pill(
+        &self,
+        ctx: &Context,
+        mask_ctx: &Context,
+        sw: f64,
+        sh: f64,
+        is_dark: bool,
+    ) {
+        let (x, y, w, h) = lossless_pill_geometry(sw, sh);
+        let r = TOOLBAR_RADIUS;
+        let is_active = self.options.lossless;
+        let is_hover = self.hovered_item == Some(8);
 
-        path_squircle_rect(mask_ctx, rx, ry, rw, rh, r);
+        // Máscara para Dual-Kawase blur con la misma geometría squircle que la barra principal
+        path_squircle_rect(mask_ctx, x, y, w, h, r);
         mask_ctx.set_source_rgba(1.0, 1.0, 1.0, 1.0);
         let _ = mask_ctx.fill();
 
-        draw_soft_shadow(ctx, rx, ry, rw, rh, r, is_dark);
+        draw_soft_shadow(ctx, x, y, w, h, r, is_dark);
 
-        path_squircle_rect(ctx, rx, ry, rw, rh, r);
-        ctx.set_source_rgba(0.12, 0.12, 0.14, 0.90);
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        path_squircle_rect(ctx, x, y, w, h, r);
+        if is_dark {
+            let a =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.68, glass_scale, 0.16, 0.95);
+            ctx.set_source_rgba(0.16, 0.17, 0.20, a);
+        } else {
+            let a =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.62, glass_scale, 0.16, 0.95);
+            ctx.set_source_rgba(0.96, 0.96, 0.98, a);
+        }
         let _ = ctx.fill_preserve();
+
         ctx.set_line_width(1.0);
-        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.20);
+        ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.16 } else { 0.45 });
         let _ = ctx.stroke();
 
-        // Punto rojo parpadeante
-        let pulse = self
-            .recording_start
-            .map(|t| (t.elapsed().as_millis() % 1000) < 500)
-            .unwrap_or(true);
-        ctx.arc(rx + 15.0, ry + 16.0, 4.5, 0.0, TAU);
-        if pulse {
-            ctx.set_source_rgba(0.96, 0.24, 0.22, 1.0);
-        } else {
-            ctx.set_source_rgba(0.96, 0.24, 0.22, 0.45);
-        }
-        let _ = ctx.fill();
+        // Brillo superior sutil (specular rim)
+        path_squircle_rect(ctx, x + 0.5, y + 0.5, w - 1.0, h - 1.0, r - 0.5);
+        let rim = LinearGradient::new(0.0, y, 0.0, y + 14.0);
+        rim.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, if is_dark { 0.18 } else { 0.35 });
+        rim.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+        let _ = ctx.set_source(&rim);
+        ctx.set_line_width(1.0);
+        let _ = ctx.stroke();
 
-        // Tiempo transcurrido
-        let secs = self
-            .recording_start
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
-        let timer_str = format!("{:02}:{:02}", secs / 60, secs % 60);
-        ctx.set_font_size(11.5);
-        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.96);
-        ctx.move_to(rx + 26.0, ry + 20.0);
-        let _ = ctx.show_text(&timer_str);
+        // Placa interior concéntrica (radio 16 px) con color de énfasis cuando está activo
+        let inner_x = x + TOOLBAR_PADDING;
+        let inner_y = y + TOOLBAR_PADDING;
+        let inner_w = w - TOOLBAR_PADDING * 2.0;
+        let inner_h = h - TOOLBAR_PADDING * 2.0;
 
-        // Botón Detener
-        let stop_x = rx + 72.0;
-        let stop_y = ry + 5.0;
-        let stop_w = 48.0;
-        let stop_h = 22.0;
-        path_squircle_rect(ctx, stop_x, stop_y, stop_w, stop_h, 6.0);
-        if self.hovered_item == Some(8) {
-            ctx.set_source_rgba(0.96, 0.28, 0.26, 0.95);
-        } else {
-            ctx.set_source_rgba(0.88, 0.22, 0.20, 0.88);
+        if is_active {
+            let (red, green, blue) = malus_de_common::config::load_accent_color();
+            path_squircle_rect(ctx, inner_x, inner_y, inner_w, inner_h, ACTION_BTN_RADIUS);
+            if is_hover {
+                ctx.set_source_rgba(
+                    (red * 1.08).min(1.0),
+                    (green * 1.08).min(1.0),
+                    (blue * 1.08).min(1.0),
+                    1.0,
+                );
+            } else {
+                ctx.set_source_rgba(red, green, blue, 0.94);
+            }
+            let _ = ctx.fill_preserve();
+            ctx.set_line_width(0.8);
+            ctx.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+            let _ = ctx.stroke();
+        } else if is_hover {
+            path_squircle_rect(ctx, inner_x, inner_y, inner_w, inner_h, ACTION_BTN_RADIUS);
+            ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.12 } else { 0.26 });
+            let _ = ctx.fill();
         }
-        let _ = ctx.fill();
-        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
-        ctx.set_font_size(10.5);
-        ctx.move_to(stop_x + 7.0, stop_y + 15.0);
-        let _ = ctx.show_text("⏹ Parar");
+
+        let fg = if is_active {
+            [1.0, 1.0, 1.0]
+        } else if is_dark {
+            [0.96, 0.96, 0.98]
+        } else {
+            [0.12, 0.12, 0.14]
+        };
+
+        let cy = y + h * 0.5;
+        let label = "Sin pérdidas";
+        ctx.set_font_size(12.0);
+        if let Ok(ext) = ctx.text_extents(label) {
+            let icon_w = 14.0;
+            let gap = 5.0;
+            let total_w = icon_w + gap + ext.width();
+            let start_x = x + (w - total_w) * 0.5;
+
+            // Indicador visual: círculo con check cuando está activo, anillo cuando está inactivo
+            let icx = start_x + icon_w * 0.5;
+            if is_active {
+                draw_checkmark(ctx, icx, cy, fg);
+            } else {
+                ctx.arc(icx, cy, 4.5, 0.0, TAU);
+                ctx.set_line_width(1.4);
+                ctx.set_source_rgba(fg[0], fg[1], fg[2], 0.65);
+                let _ = ctx.stroke();
+            }
+
+            let text_x = start_x + icon_w + gap - ext.x_bearing();
+            let text_y = y + (h - ext.height()) * 0.5 - ext.y_bearing();
+            ctx.set_source_rgba(fg[0], fg[1], fg[2], if is_active { 0.98 } else { 0.90 });
+            ctx.move_to(text_x, text_y);
+            let _ = ctx.show_text(label);
+        }
     }
+
 }
 
 fn toolbar_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
-    let w = 484.0;
-    let h = 44.0;
+    let w = TOOLBAR_WIDTH;
+    let h = TOOLBAR_HEIGHT;
     let x = ((sw - w) * 0.5).round();
     let y = (sh - h - 80.0).round().max(10.0);
     (x, y, w, h)
 }
 
+fn lossless_pill_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
+    let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
+    let pw = 128.0;
+    let ph = tb_h;
+    let right_x = tb_x + tb_w + 10.0;
+    if right_x + pw <= sw - 10.0 {
+        (right_x, tb_y, pw, ph)
+    } else {
+        // En pantallas estrechas, situar centrada justo encima de la barra
+        let cx = ((sw - pw) * 0.5).clamp(10.0, (sw - pw - 10.0).max(10.0));
+        (cx, (tb_y - ph - 8.0).max(10.0), pw, ph)
+    }
+}
+
 fn options_menu_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
     let (tb_x, tb_y, _, _) = toolbar_geometry(sw, sh);
     let mw = 224.0;
-    let mh = 262.0;
-    let mx = (tb_x + 268.0 + (108.0 - mw) * 0.5).clamp(10.0, sw - mw - 10.0);
+    let mh = 282.0;
+    let max_mx = (sw - mw - 10.0).max(10.0);
+    let mx = (tb_x + 268.0 + (108.0 - mw) * 0.5).clamp(10.0, max_mx);
     let my = tb_y - mh - 8.0;
     (mx, my, mw, mh)
-}
-
-fn recording_indicator_geometry(sw: f64) -> (f64, f64, f64, f64) {
-    let rw = 126.0;
-    let rh = 32.0;
-    let rx = sw - rw - 24.0;
-    let ry = 26.0;
-    (rx, ry, rw, rh)
 }
 
 fn hit_test_options_menu(rel_y: f64) -> Option<usize> {
@@ -1165,6 +1303,8 @@ fn hit_test_options_menu(rel_y: f64) -> Option<usize> {
         Some(7) // Recordar selección
     } else if rel_y >= 236.0 && rel_y < 256.0 {
         Some(8) // Micrófono
+    } else if rel_y >= 256.0 && rel_y < 276.0 {
+        Some(9) // Video sin pérdidas
     } else {
         None
     }
@@ -1245,7 +1385,7 @@ fn draw_soft_shadow(ctx: &Context, x: f64, y: f64, w: f64, h: f64, r: f64, is_da
 }
 
 fn draw_close_button(ctx: &Context, cx: f64, cy: f64, is_hover: bool, fg: [f64; 3], is_dark: bool) {
-    let r = 8.5;
+    let r = 9.5;
     ctx.arc(cx, cy, r, 0.0, TAU);
     if is_hover {
         if is_dark {
@@ -1302,7 +1442,7 @@ fn draw_mode_button_plate(
     let h = 32.0;
     let x = cx - w * 0.5;
     if is_active {
-        path_squircle_rect(ctx, x, y, w, h, 6.0);
+        path_squircle_rect(ctx, x, y, w, h, 10.0);
         if is_dark {
             ctx.set_source_rgba(1.0, 1.0, 1.0, 0.20);
         } else {
@@ -1310,7 +1450,7 @@ fn draw_mode_button_plate(
         }
         let _ = ctx.fill();
     } else if is_hover {
-        path_squircle_rect(ctx, x, y, w, h, 6.0);
+        path_squircle_rect(ctx, x, y, w, h, 10.0);
         if is_dark {
             ctx.set_source_rgba(1.0, 1.0, 1.0, 0.09);
         } else {
@@ -1387,11 +1527,11 @@ fn draw_options_button(
     is_dark: bool,
 ) {
     if is_active {
-        path_squircle_rect(ctx, x, y, w, h, 6.0);
+        path_squircle_rect(ctx, x, y, w, h, 10.0);
         ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.20 } else { 0.40 });
         let _ = ctx.fill();
     } else if is_hover {
-        path_squircle_rect(ctx, x, y, w, h, 6.0);
+        path_squircle_rect(ctx, x, y, w, h, 10.0);
         ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.10 } else { 0.22 });
         let _ = ctx.fill();
     }
@@ -1427,21 +1567,42 @@ fn draw_action_button(
     w: f64,
     h: f64,
     label: &str,
+    is_video: bool,
     is_hover: bool,
-    fg: [f64; 3],
-    is_dark: bool,
 ) {
-    if is_hover {
-        path_squircle_rect(ctx, x, y, w, h, 6.0);
-        ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.12 } else { 0.28 });
-        let _ = ctx.fill();
+    // Radio concéntrico al borde externo de 22 px: 22 - 6 = 16 px
+    path_squircle_rect(ctx, x, y, w, h, ACTION_BTN_RADIUS);
+    if is_video {
+        if is_hover {
+            ctx.set_source_rgba(0.95, 0.26, 0.24, 0.98);
+        } else {
+            ctx.set_source_rgba(0.88, 0.20, 0.19, 0.94);
+        }
+    } else {
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
+        if is_hover {
+            ctx.set_source_rgba(
+                (red * 1.08).min(1.0),
+                (green * 1.08).min(1.0),
+                (blue * 1.08).min(1.0),
+                1.0,
+            );
+        } else {
+            ctx.set_source_rgba(red, green, blue, 0.94);
+        }
     }
+    let _ = ctx.fill_preserve();
+
+    // Borde especular sutil para integrarse con el acabado Liquid Glass
+    ctx.set_line_width(0.8);
+    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+    let _ = ctx.stroke();
 
     ctx.set_font_size(12.5);
     if let Ok(ext) = ctx.text_extents(label) {
-        let text_x = x + (w - ext.width()) * 0.5;
-        let text_y = y + h * 0.5 + ext.height() * 0.5 - 1.0;
-        ctx.set_source_rgba(fg[0], fg[1], fg[2], 0.95);
+        let text_x = x + (w - ext.width()) * 0.5 - ext.x_bearing();
+        let text_y = y + (h - ext.height()) * 0.5 - ext.y_bearing();
+        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
         ctx.move_to(text_x, text_y);
         let _ = ctx.show_text(label);
     }
@@ -1502,4 +1663,174 @@ fn draw_checkmark(ctx: &Context, cx: f64, cy: f64, fg: [f64; 3]) {
     ctx.line_to(cx - 1.0, cy + 3.0);
     ctx.line_to(cx + 4.5, cy - 3.5);
     let _ = ctx.stroke();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smithay::backend::input::ButtonState;
+
+    #[test]
+    fn toolbar_height_matches_previous_44px_design_with_concentric_action_button() {
+        assert_eq!(TOOLBAR_HEIGHT, 44.0);
+        assert_eq!(TOOLBAR_WIDTH, 484.0);
+        assert_eq!(TOOLBAR_RADIUS, 22.0);
+        assert_eq!(ACTION_BTN_RADIUS, TOOLBAR_RADIUS - TOOLBAR_PADDING);
+        assert_eq!(ACTION_BTN_RADIUS, 16.0);
+        let (_, _, w, h) = toolbar_geometry(1920.0, 1080.0);
+        assert_eq!((w, h), (484.0, 44.0));
+
+        let mut ui = ScreenshotUiState::new();
+        ui.is_recording = true;
+        assert!(!ui.is_open(), "La grabación activa no debe bloquear el teclado ni el escritorio");
+    }
+
+    #[test]
+    fn click_on_secondary_monitor_does_not_corrupt_selection_or_panic() {
+        let mut ui = ScreenshotUiState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (2560, 1440).into());
+        ui.open(output_geo, "DP-1".to_string());
+
+        let result = ui.handle_pointer_button(
+            output_geo,
+            Point::from((3679.0, 789.0)),
+            0x110,
+            ButtonState::Pressed,
+        );
+        assert_eq!(result, ScreenshotPointerResult::Ignored);
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+    }
+
+    #[test]
+    fn near_edge_click_and_out_of_bounds_selection_never_panic_on_render() {
+        let mut ui = ScreenshotUiState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (2560, 1440).into());
+        ui.open(output_geo, "DP-1".to_string());
+
+        // Clic pegado a la esquina inferior derecha (a 1 px del borde)
+        let result = ui.handle_pointer_button(
+            output_geo,
+            Point::from((2559.0, 1439.0)),
+            0x110,
+            ButtonState::Pressed,
+        );
+        assert_eq!(result, ScreenshotPointerResult::Consumed);
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+
+        // Arrastre que sobresale hacia otro monitor a la derecha
+        ui.update_pointer_motion(output_geo, Point::from((3679.0, 1800.0)));
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+
+        // Selección guardada fuera de rango (ej. al pasar de un monitor de 2899 px a uno de 2560 px)
+        ui.selection = SelectionArea {
+            x: 2600.0,
+            y: 1500.0,
+            width: 200.0,
+            height: 200.0,
+        };
+        assert!(ui.prepare_frame(output_geo, 1.0, false).is_some());
+
+        // Reapertura con remember_selection activo en un monitor más pequeño
+        ui.open(output_geo, "DP-1".to_string());
+        assert!(ui.selection.x + ui.selection.width <= 2560.0);
+        assert!(ui.selection.y + ui.selection.height <= 1440.0);
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+    }
+
+    #[test]
+    fn resize_handles_near_edges_with_small_selection_never_panic() {
+        let output_geo = Rectangle::new((0, 0).into(), (2560, 1440).into());
+        let handles = [
+            HandleType::MoveBox,
+            HandleType::NewSelection,
+            HandleType::NorthWest,
+            HandleType::North,
+            HandleType::NorthEast,
+            HandleType::East,
+            HandleType::SouthEast,
+            HandleType::South,
+            HandleType::SouthWest,
+            HandleType::West,
+        ];
+        let corner_areas = [
+            SelectionArea {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            SelectionArea {
+                x: 2550.0,
+                y: 1430.0,
+                width: 10.0,
+                height: 10.0,
+            },
+        ];
+
+        for area in corner_areas {
+            for handle in handles {
+                let mut ui = ScreenshotUiState::new();
+                ui.open(output_geo, "DP-1".to_string());
+                ui.selection = area;
+                ui.drag_start_area = area;
+                ui.drag_start_pointer = (area.x, area.y);
+                ui.active_handle = handle;
+
+                ui.update_pointer_motion(output_geo, Point::from((-200.0, -200.0)));
+                ui.update_pointer_motion(output_geo, Point::from((4000.0, 3000.0)));
+                assert!(ui.selection.x >= 0.0 && ui.selection.y >= 0.0);
+                assert!(ui.selection.x + ui.selection.width <= 2560.0);
+                assert!(ui.selection.y + ui.selection.height <= 1440.0);
+            }
+        }
+    }
+
+    #[test]
+    fn clamp_selection_handles_nan_and_tiny_outputs() {
+        let clamped = clamp_selection_to_bounds(
+            SelectionArea {
+                x: f64::NAN,
+                y: f64::INFINITY,
+                width: f64::NEG_INFINITY,
+                height: f64::NAN,
+            },
+            6.0,
+            6.0,
+        );
+        assert!(clamped.x.is_finite() && clamped.y.is_finite());
+        assert!(clamped.width.is_finite() && clamped.height.is_finite());
+        assert!(clamped.x + clamped.width <= 6.0);
+        assert!(clamped.y + clamped.height <= 6.0);
+    }
+
+    #[test]
+    fn lossless_pill_toggles_only_in_video_mode_and_renders_cleanly() {
+        let mut ui = ScreenshotUiState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        ui.open(output_geo, "DP-1".to_string());
+        assert!(!ui.options.lossless);
+
+        let (px, py, pw, ph) = lossless_pill_geometry(1920.0, 1080.0);
+        let pill_center = Point::from((px + pw * 0.5, py + ph * 0.5));
+
+        // En modo foto, el botón "Sin pérdidas" no debe activarse
+        ui.mode = ScreenshotUiMode::CaptureFull;
+        let _ = ui.handle_pointer_button(output_geo, pill_center, 0x110, ButtonState::Pressed);
+        assert!(!ui.options.lossless);
+
+        // En modo grabación, el botón directo alterna `options.lossless` y renderiza sin errores
+        ui.mode = ScreenshotUiMode::RecordFull;
+        ui.update_pointer_motion(output_geo, pill_center);
+        assert_eq!(ui.hovered_item, Some(8));
+        let res = ui.handle_pointer_button(output_geo, pill_center, 0x110, ButtonState::Pressed);
+        assert_eq!(res, ScreenshotPointerResult::Consumed);
+        assert!(ui.options.lossless);
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+        assert!(ui.prepare_frame(output_geo, 1.0, false).is_some());
+
+        // Segundo clic lo desactiva
+        let res = ui.handle_pointer_button(output_geo, pill_center, 0x110, ButtonState::Pressed);
+        assert_eq!(res, ScreenshotPointerResult::Consumed);
+        assert!(!ui.options.lossless);
+    }
 }

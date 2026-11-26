@@ -16,7 +16,7 @@ use smithay::{
             },
             gles::GlesRenderer,
             utils::draw_render_elements,
-            Color32F, ExportMem, Frame, ImportDma, Renderer, Texture,
+            Color32F, Frame, ImportDma, Renderer, Texture,
         },
         winit::{self, WinitEvent},
     },
@@ -337,9 +337,20 @@ pub fn run_winit() -> Result<()> {
                                 }
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
+                                let is_r = sym == keysyms::KEY_r.into() || sym == keysyms::KEY_R.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
                                 let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
+
+                                // Detener grabación de pantalla activa con ⌃⌘⎋ (macOS nativo) o ⇧⌘R
+                                if state.active_screen_recording.is_some()
+                                    && ((has_ctrl && has_super && is_esc)
+                                        || (has_super && has_shift && is_r))
+                                {
+                                    info!("⏹ Atajo para detener grabación de pantalla detectado");
+                                    state.stop_screen_recording();
+                                    return FilterResult::Intercept(());
+                                }
 
                                 if state.screenshot_ui.is_open() {
                                     if state.screenshot_ui.handle_key_press(sym, *modifiers) {
@@ -3187,29 +3198,32 @@ pub fn run_winit() -> Result<()> {
 
                 if !session_locked {
                     if let Some(ref mut session) = state.active_screen_recording {
-                        let interval = std::time::Duration::from_millis(
-                            (1000 / session.target_fps.max(1)) as u64,
-                        );
-                        if now.duration_since(session.last_frame) >= interval {
-                            session.last_frame = now;
-                            let crop = session.rect.unwrap_or_else(|| Rectangle::from_size(size));
-                            let cl_x = crop.loc.x.clamp(0, size.w);
-                            let cl_y = crop.loc.y.clamp(0, size.h);
-                            let cl_w = (crop.size.w.min(size.w - cl_x) & !1).max(2);
-                            let cl_h = (crop.size.h.min(size.h - cl_y) & !1).max(2);
+                        if session.frame_due(now) {
+                            let crop = session.rect.unwrap_or_else(|| {
+                                Rectangle::from_size(
+                                    (session.frame_width as i32, session.frame_height as i32)
+                                        .into(),
+                                )
+                            });
+                            let cl_x = crop.loc.x.clamp(0, (size.w - 2).max(0));
+                            let cl_y = crop.loc.y.clamp(0, (size.h - 2).max(0));
+                            let cl_w = (session.frame_width as i32).min(size.w - cl_x).max(2);
+                            let cl_h = (session.frame_height as i32).min(size.h - cl_y).max(2);
                             let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
 
-                            if let Ok(mapping) = renderer.copy_framebuffer(
-                                &framebuffer,
-                                region,
-                                smithay::backend::allocator::Fourcc::Abgr8888,
-                            ) {
-                                if let Ok(pixels) = renderer.map_texture(&mapping) {
-                                    if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                        session.push_frame_slice(pixels);
-                                    }
-                                }
-                            }
+                            session.capture_frame_async(renderer, &framebuffer, region, now);
+                        }
+                        if now.duration_since(session.last_status_broadcast)
+                            >= std::time::Duration::from_secs(1)
+                        {
+                            session.last_status_broadcast = now;
+                            let elapsed = session.start_time.elapsed().as_secs();
+                            state.ipc_broadcaster.broadcast(
+                                &malus_de_common::ipc::IpcMessage::ScreenRecordingStatus {
+                                    is_recording: true,
+                                    elapsed_secs: elapsed,
+                                },
+                            );
                         }
                     }
                 }

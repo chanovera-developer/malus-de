@@ -1,13 +1,15 @@
 use anyhow::{Context, Result};
 use gtk4::prelude::*;
-use gtk4::{Align, ApplicationWindow, Box as GtkBox, Button, Label, Orientation};
+use gtk4::{Align, ApplicationWindow, Box as GtkBox, Label, Orientation};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use malus_de_common::ipc::{send_ipc_message, IpcMessage};
+use malus_de_common::ipc::{ipc_socket_path, send_ipc_message, IpcMessage};
 use std::cell::Cell;
 use std::fs;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::toolbar::{SelectionRect, ToolbarOptions};
@@ -97,7 +99,7 @@ pub fn start_screen_recording(
         .context("Reloj del sistema antes de UNIX_EPOCH")?
         .as_secs();
 
-    let destination = destination_dir.join(format!("Grabación de pantalla-{timestamp}.webm"));
+    let destination = destination_dir.join(format!("Grabación de pantalla-{timestamp}.mp4"));
 
     let crop_tuple = rect.map(|r| {
         (
@@ -112,113 +114,45 @@ pub fn start_screen_recording(
         destination: destination.to_string_lossy().to_string(),
         rect: crop_tuple,
         include_audio: options.record_audio,
-        fps: 30,
+        fps: 0,
+        lossless: options.lossless,
     };
 
     send_ipc_message(&msg)
         .context("No se pudo enviar solicitud de inicio de grabación al compositor Malus")?;
     info!(
-        "Grabación de pantalla iniciada en {}",
+        "Grabación de pantalla iniciada en {} (detener desde la top-bar o con ⌃⌘⎋ / ⇧⌘R)",
         destination.display()
     );
 
-    show_recording_indicator(destination.clone())?;
+    wait_for_recording_finish(&destination);
     Ok(destination)
 }
 
-fn show_recording_indicator(_destination: PathBuf) -> Result<()> {
-    let display = gtk4::gdk::Display::default()
-        .context("No se pudo acceder a la pantalla para el indicador de grabación")?;
-    let monitor = display
-        .monitors()
-        .item(0)
-        .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
-        .context("No se encontró monitor")?;
-
-    let window = ApplicationWindow::builder()
-        .title("Grabando pantalla")
-        .decorated(false)
-        .css_classes(["screenshot-recording-indicator"])
-        .build();
-
-    let hbox = GtkBox::new(Orientation::Horizontal, 8);
-    hbox.set_margin_start(4);
-    hbox.set_margin_end(4);
-    hbox.set_margin_top(2);
-    hbox.set_margin_bottom(2);
-
-    let dot = Label::new(Some("●"));
-    dot.add_css_class("screenshot-rec-dot");
-    hbox.append(&dot);
-
-    let timer_label = Label::new(Some("00:00"));
-    timer_label.add_css_class("screenshot-timer-label");
-    hbox.append(&timer_label);
-
-    let stop_btn = Button::with_label("⏹ Detener");
-    stop_btn.add_css_class("screenshot-stop-btn");
-    hbox.append(&stop_btn);
-
-    window.set_child(Some(&hbox));
-
-    if gtk4_layer_shell::is_supported() {
-        window.init_layer_shell();
-        window.set_layer(Layer::Top);
-        window.set_namespace("malus-recording-indicator");
-        window.set_monitor(&monitor);
-        window.set_anchor(Edge::Top, true);
-        window.set_anchor(Edge::Right, true);
-        window.set_margin(Edge::Top, 10);
-        window.set_margin(Edge::Right, 24);
-        window.set_exclusive_zone(0);
-        window.set_keyboard_mode(KeyboardMode::None);
-    }
-
-    window.present();
-
-    let main_loop = glib::MainLoop::new(None, false);
-    let start_time = Instant::now();
-
-    // Actualización de reloj 00:00 (con limpieza del timer al cerrar la ventana)
-    let timer_source_id = {
-        let timer_label = timer_label.clone();
-        std::rc::Rc::new(std::cell::RefCell::new(Some(glib::timeout_add_local(
-            Duration::from_secs(1),
-            move || {
-                if timer_label.root().is_none() {
-                    return glib::ControlFlow::Break;
-                }
-                let elapsed = start_time.elapsed().as_secs();
-                let mins = elapsed / 60;
-                let secs = elapsed % 60;
-                timer_label.set_label(&format!("{mins:02}:{secs:02}"));
-                glib::ControlFlow::Continue
-            },
-        ))))
+/// Espera de forma pasiva sobre el socket IPC del compositor hasta que la grabación finalice
+/// (detenida desde el botón de la top-bar, mediante ⌃⌘⎋ / ⇧⌘R o `malus-de-ctl recording stop`).
+fn wait_for_recording_finish(expected_dest: &Path) {
+    let sock_path = ipc_socket_path();
+    let Ok(stream) = UnixStream::connect(&sock_path) else {
+        warn!("No se pudo suscribir al socket IPC para esperar fin de grabación");
+        return;
     };
-
-    // Detener grabación al pulsar botón
-    {
-        let window = window.clone();
-        let loop_quit = main_loop.clone();
-        let timer_source_id = timer_source_id.clone();
-        stop_btn.connect_clicked(move |_| {
-            info!("Deteniendo grabación de pantalla por usuario...");
-            if let Some(id) = timer_source_id.borrow_mut().take() {
-                id.remove();
+    let reader = BufReader::new(stream);
+    for line in reader.lines().map_while(Result::ok) {
+        if let Ok(IpcMessage::ScreenRecordingFinished {
+            destination,
+            success,
+            error,
+        }) = serde_json::from_str::<IpcMessage>(&line)
+        {
+            if Path::new(&destination) == expected_dest || !success {
+                if let Some(err) = error {
+                    warn!("La grabación de pantalla terminó con error: {err}");
+                }
+                break;
             }
-            if let Err(e) = send_ipc_message(&IpcMessage::StopScreenRecording) {
-                warn!("Error al enviar parada de grabación: {e}");
-            }
-            window.close();
-            loop_quit.quit();
-        });
+        }
     }
-
-    main_loop.run();
-    // Pausa breve para que ffmpeg cierre el contenedor MP4
-    std::thread::sleep(Duration::from_millis(400));
-    Ok(())
 }
 
 pub fn recordings_directory() -> PathBuf {

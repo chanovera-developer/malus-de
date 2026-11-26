@@ -45,6 +45,7 @@ pub struct ToolbarOptions {
     pub destination: SaveDestination,
     pub timer_seconds: u32,
     pub record_audio: bool,
+    pub lossless: bool,
     pub show_cursor: bool,
 }
 
@@ -110,10 +111,19 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
 
     let provider = CssProvider::new();
     provider.load_from_string(TOOLBAR_CSS);
+    let accent_provider = CssProvider::new();
+    accent_provider.load_from_string(&malus_de_common::config::accent_color_css(
+        malus_de_common::config::load_accent_color_index(),
+    ));
     gtk4::style_context_add_provider_for_display(
         &display,
         &provider,
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &accent_provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_USER,
     );
 
     let initial_mode = default_mode.unwrap_or(ToolbarMode::CaptureArea);
@@ -370,9 +380,37 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
     let audio_chk = CheckButton::with_label("Grabar audio del micrófono");
     popover_vbox.append(&audio_chk);
 
+    let lossless_chk = CheckButton::with_label("Video sin pérdidas (RGB 1:1)");
+    popover_vbox.append(&lossless_chk);
+
     popover.set_child(Some(&popover_vbox));
     options_btn.set_popover(Some(&popover));
     toolbar_box.append(&options_btn);
+
+    // Botón directo "Sin pérdidas" visible en modo de grabación de video
+    let lossless_btn = ToggleButton::builder()
+        .label("Sin pérdidas")
+        .tooltip_text("Activar grabación de video sin pérdidas (RGB 1:1)")
+        .css_classes(["screenshot-pill-btn"])
+        .visible(initial_mode.is_video())
+        .build();
+    {
+        let lossless_chk_sync = lossless_chk.clone();
+        lossless_btn.connect_toggled(move |btn| {
+            let active = btn.is_active();
+            if lossless_chk_sync.is_active() != active {
+                lossless_chk_sync.set_active(active);
+            }
+        });
+        let lossless_btn_sync = lossless_btn.clone();
+        lossless_chk.connect_toggled(move |chk| {
+            let active = chk.is_active();
+            if lossless_btn_sync.is_active() != active {
+                lossless_btn_sync.set_active(active);
+            }
+        });
+    }
+    toolbar_box.append(&lossless_btn);
 
     // Botón de Acción Principal (Capturar / Grabar)
     let action_btn = Button::with_label(if initial_mode.is_video() {
@@ -398,6 +436,7 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
         let btn_area = btn_area.clone();
         let btn_rec_full = btn_rec_full.clone();
         let btn_rec_area = btn_rec_area.clone();
+        let lossless_btn = lossless_btn.clone();
         let action_btn = action_btn.clone();
         move |mode: ToolbarMode| {
             btn_full.set_active(mode == ToolbarMode::CaptureFull);
@@ -405,6 +444,7 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
             btn_area.set_active(mode == ToolbarMode::CaptureArea);
             btn_rec_full.set_active(mode == ToolbarMode::RecordFull);
             btn_rec_area.set_active(mode == ToolbarMode::RecordArea);
+            lossless_btn.set_visible(mode.is_video());
 
             if mode.is_video() {
                 action_btn.set_label("Grabar");
@@ -616,6 +656,7 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
         let timer_5 = timer_5.clone();
         let timer_10 = timer_10.clone();
         let audio_chk = audio_chk.clone();
+        let lossless_chk = lossless_chk.clone();
         let area = drawing_area.clone();
 
         action_btn.connect_clicked(move |_| {
@@ -640,6 +681,7 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
                 destination: dest,
                 timer_seconds,
                 record_audio: audio_chk.is_active(),
+                lossless: lossless_chk.is_active(),
                 show_cursor: true,
             };
 

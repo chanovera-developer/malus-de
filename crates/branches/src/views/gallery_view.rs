@@ -408,6 +408,13 @@ impl GalleryView {
                 let icon = crate::views::create_folder_aware_icon(item, 128);
                 main_box.append(&icon);
             }
+        } else if !item.is_dir && malus_de_common::video_thumb::is_video_path(&item.path) {
+            let (media_w, _) = crate::views::create_item_media_widget(
+                item,
+                256,
+                Some("branches-gallery-large-image"),
+            );
+            main_box.append(&media_w);
         } else if [
             "rs", "toml", "json", "md", "txt", "sh", "py", "c", "cpp", "js", "html", "css",
         ]

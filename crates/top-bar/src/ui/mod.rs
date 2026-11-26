@@ -5,6 +5,7 @@ pub mod control_center;
 pub mod global_menu;
 pub mod menubar_extras;
 pub mod power_profile;
+pub mod recording_indicator;
 pub mod status_tray;
 pub mod system_menu;
 pub mod theme;

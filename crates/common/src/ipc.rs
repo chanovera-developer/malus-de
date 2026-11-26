@@ -101,12 +101,14 @@ pub enum IpcMessage {
         interactive: bool,
         record_video: bool,
     },
-    /// Inicia la grabación de pantalla con parámetros opcionales de recorte y audio
+    /// Inicia la grabación de pantalla con parámetros opcionales de recorte, audio y modo sin pérdidas
     StartScreenRecording {
         destination: String,
         rect: Option<(i32, i32, i32, i32)>,
         include_audio: bool,
         fps: u32,
+        #[serde(default)]
+        lossless: bool,
     },
     /// Detiene la grabación de pantalla activa
     StopScreenRecording,
@@ -328,6 +330,7 @@ pub struct IpcBroadcaster {
     last_active: Arc<Mutex<Option<String>>>,
     last_running: Arc<Mutex<Option<String>>>,
     last_minimized: Arc<Mutex<Option<String>>>,
+    last_recording_status: Arc<Mutex<Option<String>>>,
     incoming_tx: std::sync::mpsc::Sender<IpcMessage>,
     incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<IpcMessage>>>,
 }
@@ -346,6 +349,7 @@ impl IpcBroadcaster {
             last_active: Arc::new(Mutex::new(None)),
             last_running: Arc::new(Mutex::new(None)),
             last_minimized: Arc::new(Mutex::new(None)),
+            last_recording_status: Arc::new(Mutex::new(None)),
             incoming_tx: tx,
             incoming_rx: Arc::new(Mutex::new(rx)),
         }
@@ -369,6 +373,7 @@ impl IpcBroadcaster {
         let last_active = self.last_active.clone();
         let last_running = self.last_running.clone();
         let last_minimized = self.last_minimized.clone();
+        let last_recording_status = self.last_recording_status.clone();
         let incoming_tx = self.incoming_tx.clone();
         let active_readers = Arc::new(AtomicUsize::new(0));
 
@@ -402,6 +407,9 @@ impl IpcBroadcaster {
                     }
                     if let Some(ref min) = *last_minimized.lock().unwrap() {
                         let _ = stream.write_all(min.as_bytes());
+                    }
+                    if let Some(ref rec) = *last_recording_status.lock().unwrap() {
+                        let _ = stream.write_all(rec.as_bytes());
                     }
 
                     // Hilo lector para escuchar peticiones del cliente (ej. ActivateApp, ToggleSpotlight)
@@ -473,6 +481,18 @@ impl IpcBroadcaster {
                     return;
                 }
                 *guard = Some(line.clone());
+            }
+            IpcMessage::ScreenRecordingStatus { is_recording, .. } => {
+                let mut guard = self.last_recording_status.lock().unwrap();
+                if *is_recording {
+                    *guard = Some(line.clone());
+                } else {
+                    *guard = None;
+                }
+            }
+            IpcMessage::ScreenRecordingFinished { .. } => {
+                let mut guard = self.last_recording_status.lock().unwrap();
+                *guard = None;
             }
             _ => {}
         }
@@ -695,7 +715,8 @@ mod tests {
             destination: "/home/user/video.mp4".to_string(),
             rect: Some((100, 200, 800, 600)),
             include_audio: true,
-            fps: 30,
+            fps: 60,
+            lossless: true,
         };
         let json = serde_json::to_string(&msg).expect("Serialización falló");
         let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
@@ -705,8 +726,22 @@ mod tests {
                 destination,
                 rect: Some((100, 200, 800, 600)),
                 include_audio: true,
-                fps: 30,
+                fps: 60,
+                lossless: true,
             } if destination == "/home/user/video.mp4"
+        ));
+
+        // Retrocompatibilidad: payloads antiguos sin campo `lossless` deben deserializarse con false
+        let legacy_json = r#"{"StartScreenRecording":{"destination":"/home/user/old.mp4","rect":null,"include_audio":false,"fps":30}}"#;
+        let legacy_parsed: IpcMessage =
+            serde_json::from_str(legacy_json).expect("Deserialización legacy falló");
+        assert!(matches!(
+            legacy_parsed,
+            IpcMessage::StartScreenRecording {
+                lossless: false,
+                fps: 30,
+                ..
+            }
         ));
 
         let stop = IpcMessage::StopScreenRecording;

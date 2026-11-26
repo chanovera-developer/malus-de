@@ -431,6 +431,16 @@ thread_local! {
 }
 
 fn decode_desktop_thumb_rgba(path: &Path, decode_px: i32) -> Option<DecodedDesktopThumb> {
+    if malus_de_common::video_thumb::is_video_path(path) {
+        let video = malus_de_common::video_thumb::extract_video_thumbnail_rgba(path, decode_px)?;
+        return Some(DecodedDesktopThumb {
+            width: video.width,
+            height: video.height,
+            rowstride: video.rowstride,
+            bytes: video.bytes,
+        });
+    }
+
     let pixbuf =
         gdk_pixbuf::Pixbuf::from_file_at_scale(path, decode_px, decode_px, true).ok()?;
     let width = pixbuf.width();
@@ -561,6 +571,9 @@ fn desktop_thumb_cache_key(path: &Path, icon_size: i32) -> DesktopThumbCacheKey 
 
 fn request_desktop_icon_thumbnail(img: &Image, path: &Path, icon_size: i32) -> bool {
     let key = desktop_thumb_cache_key(path, icon_size);
+    if key.size == 0 {
+        return false;
+    }
     if let Some(cached) = DESKTOP_THUMB_CACHE.with(|cache| cache.borrow_mut().get(&key)) {
         img.set_paintable(Some(&cached));
         img.set_pixel_size(icon_size);
@@ -1595,6 +1608,30 @@ pub fn calculate_grid_position(
             (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64,
         ),
     )
+}
+
+pub fn find_first_free_grid_index(
+    occupied: &HashMap<PathBuf, (f64, f64)>,
+    rows: usize,
+    metrics: &IconLayoutMetrics,
+    align_left: bool,
+    desktop_size: (i32, i32),
+    top_margin: f64,
+) -> usize {
+    let tol_x = (metrics.cell_width() as f64 * 0.45).max(16.0);
+    let tol_y = (metrics.cell_height() as f64 * 0.45).max(16.0);
+    let max_slots = occupied.len().saturating_add(64);
+    for idx in 0..max_slots {
+        let (cx, cy) =
+            calculate_grid_position(idx, rows, metrics, align_left, desktop_size, top_margin);
+        let taken = occupied
+            .values()
+            .any(|&(ox, oy)| (ox - cx).abs() < tol_x && (oy - cy).abs() < tol_y);
+        if !taken {
+            return idx;
+        }
+    }
+    occupied.len()
 }
 
 fn resolve_desktop_dir() -> Option<PathBuf> {
@@ -3322,8 +3359,17 @@ fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
     match file_info {
         Ok(info) => {
             let display_name = info.display_name().to_string();
-            let icon = info.icon();
-            let content_type = info.content_type().map(|value| value.to_string());
+            let mut icon = info.icon();
+            let mut content_type = info.content_type().map(|value| value.to_string());
+            if content_type.as_deref() == Some("application/x-zerosize") {
+                let (guessed, _) = gio::content_type_guess(Some(path), &[]);
+                if guessed.as_str() != "application/octet-stream"
+                    && guessed.as_str() != "application/x-zerosize"
+                {
+                    icon = Some(gio::content_type_get_icon(guessed.as_str()));
+                    content_type = Some(guessed.to_string());
+                }
+            }
             let category = StackCategory::categorize(path, content_type.as_deref());
             Some(DesktopItemData {
                 path: path.to_path_buf(),
@@ -3356,6 +3402,7 @@ fn refresh_desktop_icons(
     icon_context_menu: &Rc<DesktopIconContextMenu>,
     top_margin: f64,
 ) {
+    malus_de_common::video_thumb::stop_active_inline_video_playback();
     let mut child = fixed.first_child();
     while let Some(current) = child {
         child = current.next_sibling();
@@ -5625,9 +5672,12 @@ fn render_single_icon(
     let is_image = content_type
         .as_deref()
         .is_some_and(|ct| ct.starts_with("image/"));
+    let is_video = !path.is_dir()
+        && malus_de_common::video_thumb::is_video_file(&path, content_type.as_deref());
 
     let icon_image = Image::new();
-    let cached_thumb_applied = is_image && request_desktop_icon_thumbnail(&icon_image, &path, metrics.icon_size);
+    let cached_thumb_applied =
+        (is_image || is_video) && request_desktop_icon_thumbnail(&icon_image, &path, metrics.icon_size);
     if !cached_thumb_applied {
         match icon.as_ref() {
             Some(i) => {
@@ -5666,7 +5716,20 @@ fn render_single_icon(
         .tooltip_text(path.to_string_lossy())
         .build();
 
-    item_box.append(&icon_image);
+    if is_video {
+        icon_image.set_size_request(metrics.icon_size, metrics.icon_size);
+        icon_image.set_halign(Align::Center);
+        icon_image.set_valign(Align::Center);
+        let video_overlay = malus_de_common::video_thumb::wrap_video_thumbnail_with_play_button(
+            &icon_image,
+            &path,
+            metrics.icon_size,
+            true,
+        );
+        item_box.append(&video_overlay);
+    } else {
+        item_box.append(&icon_image);
+    }
     item_box.append(&label);
 
     unsafe {
@@ -6548,11 +6611,18 @@ fn populate_wallpaper_role(
                 let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1)
                     / metrics.cell_height())
                 .max(1) as usize;
-                let existing_count = pos_ins.borrow().len();
                 let mut pos_map = pos_ins.borrow_mut();
+                let free_idx = find_first_free_grid_index(
+                    &pos_map,
+                    rows,
+                    &metrics,
+                    cfg_snap.align_left,
+                    desktop_size,
+                    top_margin,
+                );
                 render_single_icon(
                     &icons_ins,
-                    existing_count,
+                    free_idx,
                     rows,
                     item_data,
                     &metrics,
@@ -7735,6 +7805,8 @@ fn populate_wallpaper_role(
                 let trigger_c = trigger_refresh.clone();
                 let pending_desktop_refresh: Rc<Cell<Option<glib::SourceId>>> =
                     Rc::new(Cell::new(None));
+                let pending_icon_updates: Rc<RefCell<HashMap<PathBuf, glib::SourceId>>> =
+                    Rc::new(RefCell::new(HashMap::new()));
                 let insert_c = insert_single_icon.clone();
                 let cfg_mon = current_config.clone();
                 let icons_mon = icons.clone();
@@ -7752,6 +7824,9 @@ fn populate_wallpaper_role(
                     match event_type {
                         gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
                             if let Some(ref p) = event_path {
+                                if let Some(sid) = pending_icon_updates.borrow_mut().remove(p) {
+                                    sid.remove();
+                                }
                                 let removed_widget = remove_desktop_icon_widget(&icons_mon, p);
                                 let removed_pos = pos_mon.borrow_mut().remove(p).is_some();
                                 sel_mon.borrow_mut().remove(p);
@@ -7773,13 +7848,54 @@ fn populate_wallpaper_role(
                         | gio::FileMonitorEvent::AttributeChanged
                         | gio::FileMonitorEvent::Changed => {
                             if let Some(ref p) = event_path {
-                                if rec_mon.borrow_mut().remove(p)
-                                    || has_desktop_icon_widget(&icons_mon, p)
-                                {
+                                if rec_mon.borrow_mut().remove(p) {
                                     return;
                                 }
                                 let cfg_snap = cfg_mon.borrow().clone();
                                 if !cfg_snap.show_icons {
+                                    return;
+                                }
+                                if has_desktop_icon_widget(&icons_mon, p) {
+                                    // Si el archivo cambió tras crearse vacío (p. ej. grabación de pantalla o descarga),
+                                    // reprogramar una actualización in-place de su ícono/miniatura al asentarse la escritura.
+                                    let is_content_update = matches!(
+                                        event_type,
+                                        gio::FileMonitorEvent::ChangesDoneHint
+                                            | gio::FileMonitorEvent::Changed
+                                    );
+                                    if is_content_update
+                                        && !cfg_snap.use_stacks
+                                        && p.parent() == Some(desktop_dir_mon.as_path())
+                                        && fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0)
+                                    {
+                                        if let Some(old_id) =
+                                            pending_icon_updates.borrow_mut().remove(p)
+                                        {
+                                            old_id.remove();
+                                        }
+                                        let p_upd = p.clone();
+                                        let icons_upd = icons_mon.clone();
+                                        let insert_upd = insert_c.clone();
+                                        let map_upd = pending_icon_updates.clone();
+                                        let delay_ms = if event_type
+                                            == gio::FileMonitorEvent::ChangesDoneHint
+                                        {
+                                            120
+                                        } else {
+                                            350
+                                        };
+                                        let sid = glib::timeout_add_local_once(
+                                            std::time::Duration::from_millis(delay_ms),
+                                            move || {
+                                                map_upd.borrow_mut().remove(&p_upd);
+                                                if p_upd.symlink_metadata().is_ok() {
+                                                    remove_desktop_icon_widget(&icons_upd, &p_upd);
+                                                    insert_upd(&p_upd);
+                                                }
+                                            },
+                                        );
+                                        pending_icon_updates.borrow_mut().insert(p.clone(), sid);
+                                    }
                                     return;
                                 }
                                 if !cfg_snap.use_stacks && p.parent() == Some(desktop_dir_mon.as_path()) {
@@ -9202,5 +9318,40 @@ mod squircle_thumb_tests {
         assert_eq!(ta.step('c', &items, Some("Captura2.png")), Some(1));
 
         assert_eq!(ta.step('n', &items, Some("Captura1.png")), Some(3));
+    }
+
+    #[test]
+    fn find_first_free_grid_index_avoids_occupied_slots() {
+        let cfg = malus_de_common::config::DesktopIconsConfig {
+            icon_size: 64,
+            align_left: false,
+            ..Default::default()
+        };
+        let metrics = super::IconLayoutMetrics::from_config(&cfg);
+        let desktop_size = (2560, 1440);
+        let top_margin = super::DESKTOP_TOP_MARGIN;
+        let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height())
+            .max(1) as usize;
+
+        let mut occupied = HashMap::new();
+        let p0 = super::calculate_grid_position(0, rows, &metrics, false, desktop_size, top_margin);
+        let p3 = super::calculate_grid_position(3, rows, &metrics, false, desktop_size, top_margin);
+        let p4 = super::calculate_grid_position(4, rows, &metrics, false, desktop_size, top_margin);
+        occupied.insert(PathBuf::from("/tmp/a.webp"), p0);
+        occupied.insert(PathBuf::from("/tmp/b.txt"), p3);
+        occupied.insert(PathBuf::from("/tmp/c.txt"), p4);
+
+        // Con 3 elementos ocupando 0, 3 y 4, la primera celda libre debe ser 1 (no 3 como hacía len()).
+        assert_eq!(
+            super::find_first_free_grid_index(
+                &occupied,
+                rows,
+                &metrics,
+                false,
+                desktop_size,
+                top_margin
+            ),
+            1
+        );
     }
 }

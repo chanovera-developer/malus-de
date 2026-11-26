@@ -489,6 +489,10 @@ impl ColumnViewInner {
                 let img = crate::views::create_folder_aware_icon(item, 96);
                 img.upcast()
             }
+        } else if !item.is_dir && malus_de_common::video_thumb::is_video_path(&item.path) {
+            let (media_w, _) =
+                crate::views::create_item_media_widget(item, 160, Some("branches-preview-image"));
+            media_w
         } else {
             let img = crate::views::create_folder_aware_icon(item, 96);
             img.upcast()

@@ -1371,12 +1371,12 @@ impl IconView {
             vbox.add_css_class("branches-cut-item");
         }
 
-        let img =
-            crate::views::create_item_image(item, metrics.icon_size, Some("branches-item-thumb"));
-        img.set_size_request(metrics.icon_size, metrics.icon_size);
-        img.set_halign(Align::Center);
-        img.set_valign(Align::Center);
-        vbox.append(&img);
+        let (media_widget, img) = crate::views::create_item_media_widget(
+            item,
+            metrics.icon_size,
+            Some("branches-item-thumb"),
+        );
+        vbox.append(&media_widget);
 
         let label = Label::builder()
             .label(&item.name)

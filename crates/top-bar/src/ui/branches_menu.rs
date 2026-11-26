@@ -651,8 +651,8 @@ fn confirm_and_empty_trash() {
 
 /// Rellena el popover del nombre de la app («Branches») según `Finder1.png`:
 /// - Acerca de Branches
-/// - [glifo] Configuración... (⌘,)
-/// - [glifo] Vaciar basurero... (⇧⌘⌫)
+/// - \[glifo\] Configuración... (⌘,)
+/// - \[glifo\] Vaciar basurero... (⇧⌘⌫)
 /// - Servicios (submenú)
 /// - Ocultar Branches (⌘H)
 /// - Ocultar otros (⌥⌘H)

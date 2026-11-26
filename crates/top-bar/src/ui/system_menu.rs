@@ -28,7 +28,7 @@ fn format_force_quit_label(app_name: Option<&str>, es: bool) -> String {
     }
 }
 
-/// Actualiza la etiqueta «Forzar salida de <App>» del menú principal con la aplicación activa.
+/// Actualiza la etiqueta «Forzar salida de `<App>`» del menú principal con la aplicación activa.
 pub fn update_active_app_for_system_menu(app_display_name: Option<&str>) {
     let text = format_force_quit_label(app_display_name, is_spanish_locale());
     SYSTEM_MENU_FORCEQUIT_LABEL.with(|cell| {

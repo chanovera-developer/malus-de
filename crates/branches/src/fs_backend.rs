@@ -712,6 +712,16 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
         let content_type = info
             .attribute_string("standard::fast-content-type")
             .unwrap_or_default();
+        if content_type.as_str() == "application/x-zerosize" {
+            let (guessed, _) = gio::content_type_guess(Some(path), &[]);
+            if guessed.as_str() != "application/octet-stream"
+                && guessed.as_str() != "application/x-zerosize"
+            {
+                let description = gio::content_type_get_description(guessed.as_str()).to_string();
+                let icon = gio::content_type_get_icon(guessed.as_str());
+                return (description, icon);
+            }
+        }
         let description = gio::content_type_get_description(&content_type).to_string();
 
         if let Some(icon) = info.icon() {

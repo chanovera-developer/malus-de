@@ -15,6 +15,8 @@ pub mod mac_switch;
 #[cfg(feature = "gtk-ui")]
 pub mod sidebar_style;
 pub mod theme;
+#[cfg(feature = "gtk-ui")]
+pub mod video_thumb;
 pub mod wayland;
 
 /// Detecta si el locale activo del sistema corresponde a idioma español (`es_*`).

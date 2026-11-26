@@ -436,6 +436,15 @@ fn build_ui(app: &Application) {
                 | malus_de_common::ipc::IpcMessage::ReloadInputConfig => {
                     ui::status_tray::refresh_keyboard_layout_badge();
                 }
+                malus_de_common::ipc::IpcMessage::ScreenRecordingStatus {
+                    is_recording,
+                    elapsed_secs,
+                } => {
+                    ui::recording_indicator::update_recording_status(is_recording, elapsed_secs);
+                }
+                malus_de_common::ipc::IpcMessage::ScreenRecordingFinished { .. } => {
+                    ui::recording_indicator::update_recording_status(false, 0);
+                }
                 _ => {}
             }
         }
@@ -474,12 +483,13 @@ fn build_ui(app: &Application) {
         .hexpand(true)
         .build();
 
-    // 3. Zona Derecha: Auto-Tiling + Power Mode + Tray + Clock
+    // 3. Zona Derecha: Indicador de grabación + Auto-Tiling + Power Mode + Tray + Clock
     let right_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .valign(gtk4::Align::Center)
         .spacing(6)
         .build();
+    right_box.append(&ui::recording_indicator::create_recording_indicator_widget());
     right_box.append(&ui::auto_tiling::create_auto_tiling_widget());
     right_box.append(&ui::power_profile::create_power_profile_widget());
     right_box.append(&ui::status_tray::create_status_tray_widget());

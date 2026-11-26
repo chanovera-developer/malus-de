@@ -1973,6 +1973,14 @@ pub(super) fn is_image_thumbnail_candidate(item: &crate::fs_backend::FileItem) -
         .unwrap_or(false)
 }
 
+pub(super) fn is_video_thumbnail_candidate(item: &crate::fs_backend::FileItem) -> bool {
+    !item.is_dir && item.size > 0 && malus_de_common::video_thumb::is_video_path(&item.path)
+}
+
+pub(super) fn is_thumbnail_candidate(item: &crate::fs_backend::FileItem) -> bool {
+    is_image_thumbnail_candidate(item) || is_video_thumbnail_candidate(item)
+}
+
 fn thumbnail_decode_target_px(pixel_size: i32) -> i32 {
     (pixel_size.max(16) * 2).clamp(32, 512)
 }
@@ -2030,6 +2038,17 @@ fn apply_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius
 }
 
 fn decode_thumbnail_bytes(path: &std::path::Path, target_px: i32) -> Option<DecodedThumbnail> {
+    if malus_de_common::video_thumb::is_video_path(path) {
+        let video = malus_de_common::video_thumb::extract_video_thumbnail_rgba(path, target_px)?;
+        return Some(DecodedThumbnail {
+            width: video.width,
+            height: video.height,
+            rowstride: video.rowstride,
+            has_alpha: true,
+            bytes: video.bytes,
+        });
+    }
+
     let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, target_px, target_px, true).ok()?;
     let width = pixbuf.width();
     let height = pixbuf.height();
@@ -2105,7 +2124,15 @@ pub(super) fn update_item_image_thumbnail(
 
     apply_folder_icon_tint(img, item);
     img.set_pixel_size(pixel_size);
-    if !is_image_thumbnail_candidate(item) {
+    if let Some(overlay) = img
+        .parent()
+        .and_then(|p| p.downcast::<gtk4::Overlay>().ok())
+    {
+        if overlay.has_css_class("malus-video-thumb-overlay") {
+            malus_de_common::video_thumb::update_video_play_overlay_size(&overlay, pixel_size);
+        }
+    }
+    if !is_thumbnail_candidate(item) {
         if let Some(css) = thumb_css_class {
             img.remove_css_class(css);
         }
@@ -2169,7 +2196,7 @@ pub(super) fn create_item_image(
     let img = gtk4::Image::new();
     apply_folder_icon_tint(&img, item);
     img.set_pixel_size(pixel_size);
-    if is_image_thumbnail_candidate(item) {
+    if is_thumbnail_candidate(item) {
         let decode_px = thumbnail_decode_target_px(pixel_size);
         let modified_secs = item
             .modified
@@ -2192,6 +2219,32 @@ pub(super) fn create_item_image(
         apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
     }
     img
+}
+
+/// Crea el widget visual del elemento (imagen o miniatura de video con botón interactivo ▶/⏸).
+pub(super) fn create_item_media_widget(
+    item: &crate::fs_backend::FileItem,
+    pixel_size: i32,
+    thumb_css_class: Option<&str>,
+) -> (gtk4::Widget, gtk4::Image) {
+    use gtk4::prelude::*;
+
+    let img = create_item_image(item, pixel_size, thumb_css_class);
+    img.set_size_request(pixel_size, pixel_size);
+    img.set_halign(gtk4::Align::Center);
+    img.set_valign(gtk4::Align::Center);
+
+    if !item.is_dir && pixel_size >= 36 && malus_de_common::video_thumb::is_video_path(&item.path) {
+        let overlay = malus_de_common::video_thumb::wrap_video_thumbnail_with_play_button(
+            &img,
+            &item.path,
+            pixel_size,
+            true,
+        );
+        return (overlay.upcast(), img);
+    }
+
+    (img.clone().upcast(), img)
 }
 
 pub(crate) fn apply_item_gicon_or_tinted_folder(
@@ -2292,6 +2345,21 @@ mod tests {
             "notas.txt",
             false,
             128
+        )));
+        assert!(super::is_video_thumbnail_candidate(&make_item(
+            "grabacion.mp4",
+            false,
+            200 * 1024 * 1024
+        )));
+        assert!(super::is_thumbnail_candidate(&make_item(
+            "grabacion.mp4",
+            false,
+            200 * 1024 * 1024
+        )));
+        assert!(!super::is_video_thumbnail_candidate(&make_item(
+            "vacio.mp4",
+            false,
+            0
         )));
         assert_eq!(thumbnail_decode_target_px(64), 128);
         assert_eq!(thumbnail_decode_target_px(512), 512);

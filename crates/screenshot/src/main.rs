@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
-use glib::ControlFlow;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
-    EventControllerKey, GestureDrag, Label, Orientation, Overlay, Picture,
+    Align, CssProvider, DrawingArea, EventControllerKey, GestureDrag, Label, Overlay,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-use libadwaita as adw;
 use malus_de_common::ipc::{send_ipc_message, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -20,6 +17,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use tracing::info;
 
+mod preview_ui;
 mod recorder;
 pub mod toolbar;
 
@@ -59,20 +57,64 @@ struct Args {
     #[arg(long, help = "Directorio destino para guardar la captura")]
     save_dir: Option<PathBuf>,
 
+    #[arg(long, help = "Nombre de salida/monitor específico a capturar")]
+    output: Option<String>,
+
+    #[arg(long, help = "Mostrar la tarjeta de vista previa para una grabación terminada")]
+    show_recording: Option<PathBuf>,
+
     #[arg(long, default_value_t = 0, help = "Temporizador en segundos")]
     delay: u32,
 }
 
-const THUMBNAIL_CSS: &str = include_str!("styles/thumbnail.css");
-
-const CAPTURE_FLASH_CSS: &str = include_str!("styles/capture-flash.css");
-
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
-const THUMBNAIL_PREVIEW_SIZE: (i32, i32) = (320, 180);
+
+fn parse_crop_arg(crop_str: &str) -> Option<AreaSelection> {
+    let parts: Vec<f64> = crop_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if parts.len() == 6 {
+        Some(AreaSelection {
+            rect: SelectionRect {
+                x: parts[0],
+                y: parts[1],
+                width: parts[2],
+                height: parts[3],
+                surface_width: parts[4],
+                surface_height: parts[5],
+            },
+        })
+    } else if parts.len() == 4 {
+        Some(AreaSelection {
+            rect: SelectionRect {
+                x: parts[0],
+                y: parts[1],
+                width: parts[2],
+                height: parts[3],
+                surface_width: parts[0] + parts[2],
+                surface_height: parts[1] + parts[3],
+            },
+        })
+    } else {
+        None
+    }
+}
 
 fn main() -> Result<()> {
     init_logging("malus_de_screenshot");
     let args = Args::parse();
+
+    if let Some(recording_path) = args.show_recording {
+        play_capture_sound();
+        show_capture_ui(
+            CaptureMode::Record,
+            Some(recording_path),
+            "Grabación de video completada.".to_string(),
+        );
+        return Ok(());
+    }
+
     info!("Iniciando captura con modo: {:?}", args.mode);
 
     match args.mode {
@@ -92,7 +134,7 @@ fn main() -> Result<()> {
                         if options.timer_seconds > 0 {
                             recorder::run_countdown(options.timer_seconds)?;
                         }
-                        let source = request_compositor_capture()?;
+                        let source = request_compositor_capture(args.output.as_deref())?;
                         let final_source = if let Some(r) = rect {
                             let cropped = crop_capture(
                                 &source,
@@ -165,7 +207,7 @@ fn main() -> Result<()> {
             if args.delay > 0 {
                 std::thread::sleep(Duration::from_secs(args.delay as u64));
             }
-            let source = request_compositor_capture()?;
+            let source = request_compositor_capture(args.output.as_deref())?;
             let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
             finish_capture_with_dir(args.mode, source, args.clipboard_only, &dest_dir)?;
         }
@@ -173,40 +215,11 @@ fn main() -> Result<()> {
             if args.delay > 0 {
                 std::thread::sleep(Duration::from_secs(args.delay as u64));
             }
-            let selection = if let Some(ref crop_str) = args.crop {
-                let parts: Vec<f64> = crop_str
-                    .split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect();
-                if parts.len() == 6 {
-                    AreaSelection {
-                        rect: SelectionRect {
-                            x: parts[0],
-                            y: parts[1],
-                            width: parts[2],
-                            height: parts[3],
-                            surface_width: parts[4],
-                            surface_height: parts[5],
-                        },
-                    }
-                } else if parts.len() == 4 {
-                    AreaSelection {
-                        rect: SelectionRect {
-                            x: parts[0],
-                            y: parts[1],
-                            width: parts[2],
-                            height: parts[3],
-                            surface_width: parts[0] + parts[2],
-                            surface_height: parts[1] + parts[3],
-                        },
-                    }
-                } else {
-                    select_area()?
-                }
-            } else {
-                select_area()?
+            let selection = match args.crop.as_deref().and_then(parse_crop_arg) {
+                Some(sel) => sel,
+                None => select_area()?,
             };
-            let source = request_compositor_capture()?;
+            let source = request_compositor_capture(args.output.as_deref())?;
             let crop_result = crop_capture(&source, &selection);
             remove_temporary_capture(&source);
             let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
@@ -217,37 +230,41 @@ fn main() -> Result<()> {
                 &dest_dir,
             )?;
         }
+        CaptureMode::Window => {
+            if args.delay > 0 {
+                std::thread::sleep(Duration::from_secs(args.delay as u64));
+            }
+            let source = request_compositor_capture(args.output.as_deref())?;
+            let final_source = if let Some(selection) = args.crop.as_deref().and_then(parse_crop_arg)
+            {
+                let cropped = crop_capture(&source, &selection);
+                remove_temporary_capture(&source);
+                cropped?
+            } else {
+                source
+            };
+            let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
+            finish_capture_with_dir(
+                CaptureMode::Window,
+                final_source,
+                args.clipboard_only,
+                &dest_dir,
+            )?;
+        }
         CaptureMode::Record => {
             let options = toolbar::ToolbarOptions {
                 destination: toolbar::SaveDestination::Screenshots,
                 timer_seconds: 0,
                 record_audio: false,
+                lossless: false,
                 show_cursor: true,
             };
-            let video_path = recorder::start_screen_recording(None, &options)?;
-            play_capture_sound();
-            send_capture_notification(
-                "Grabación de pantalla guardada",
-                &format!("Guardada en {}", video_path.display()),
-            );
-            show_capture_ui(
-                CaptureMode::Record,
-                Some(video_path),
-                "Grabación de video completada".to_string(),
-            );
-        }
-        CaptureMode::Window => {
-            anyhow::bail!("El modo de ventana aún no está implementado");
+            let _video_path = recorder::start_screen_recording(None, &options)?;
         }
         CaptureMode::Ocr => anyhow::bail!("El modo OCR aún no está implementado"),
     }
 
     Ok(())
-}
-
-#[allow(dead_code)]
-fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> Result<()> {
-    finish_capture_with_dir(mode, source, clipboard_only, &screenshots_directory())
 }
 
 fn finish_capture_with_dir(
@@ -362,7 +379,7 @@ fn play_capture_sound() {
     });
 }
 
-fn request_compositor_capture() -> Result<PathBuf> {
+fn request_compositor_capture(output_name: Option<&str>) -> Result<PathBuf> {
     let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .context("XDG_RUNTIME_DIR no está definido")?;
@@ -375,8 +392,15 @@ fn request_compositor_capture() -> Result<PathBuf> {
             .as_nanos()
     );
     let destination = runtime_dir.join(format!("{token}.png"));
-    let message = IpcMessage::CaptureScreenshot {
-        destination: destination.to_string_lossy().into_owned(),
+    let message = if let Some(out) = output_name {
+        IpcMessage::CaptureScreenshotForOutput {
+            destination: destination.to_string_lossy().into_owned(),
+            output_name: out.to_string(),
+        }
+    } else {
+        IpcMessage::CaptureScreenshot {
+            destination: destination.to_string_lossy().into_owned(),
+        }
     };
     send_ipc_message(&message).context("No se pudo enviar la solicitud al compositor Malus")?;
 
@@ -759,6 +783,17 @@ mod tests {
         fs::remove_file(cropped).unwrap();
         fs::remove_file(source).unwrap();
     }
+
+    #[test]
+    fn toolbar_css_matches_44px_height_concentric_accent_button_and_5s_thumbnail() {
+        let css = crate::toolbar::TOOLBAR_CSS;
+        assert!(css.contains("border-radius: 22px;"));
+        assert!(css.contains("border-radius: 16px;"));
+        assert!(css.contains("min-height: 32px;"));
+        assert!(css.contains("background-color: @accent_bg_color;"));
+        assert_eq!(crate::preview_ui::THUMBNAIL_DISPLAY_SECS, 5);
+        assert!(super::parse_crop_arg("10,20,300,200,1920,1080").is_some());
+    }
 }
 
 fn save_capture(source: PathBuf, destination_dir: &std::path::Path) -> Result<PathBuf> {
@@ -876,257 +911,17 @@ fn copy_image_to_clipboard(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_status: String) {
-    if let Err(err) = adw::init() {
-        tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
-    }
-
-    let app = Application::builder()
-        .application_id("org.malus.de.screenshot-ui")
-        .build();
-
-    app.connect_startup(|_| {
-        let flash_provider = CssProvider::new();
-        flash_provider.load_from_string(CAPTURE_FLASH_CSS);
-        let thumb_provider = CssProvider::new();
-        thumb_provider.load_from_string(THUMBNAIL_CSS);
-
-        if let Some(display) = gtk4::gdk::Display::default() {
-            gtk4::style_context_add_provider_for_display(
-                &display,
-                &flash_provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-            gtk4::style_context_add_provider_for_display(
-                &display,
-                &thumb_provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
-    });
-
-    let capture_path_clone = capture_path.clone();
-    app.connect_activate(move |application| {
-        let Some(display) = gtk4::gdk::Display::default() else {
-            tracing::warn!("No se pudo mostrar la interfaz de captura: no hay pantalla GTK");
-            application.quit();
-            return;
-        };
-
-        // 1. Destello blanco visual en cada pantalla conectada (solo para fotos)
-        let mut flash_windows = Vec::new();
-        if mode != CaptureMode::Record {
-            let monitors = display.monitors();
-            for index in 0..monitors.n_items() {
-                let Some(monitor) = monitors
-                    .item(index)
-                    .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
-                else {
-                    continue;
-                };
-
-                let flash_window = ApplicationWindow::builder()
-                    .application(application)
-                    .title("Destello de captura")
-                    .decorated(false)
-                    .css_classes(["malus-screenshot-flash"])
-                    .opacity(0.85)
-                    .build();
-
-                if gtk4_layer_shell::is_supported() {
-                    flash_window.init_layer_shell();
-                    flash_window.set_layer(Layer::Overlay);
-                    flash_window.set_namespace("malus-screenshot-flash");
-                    flash_window.set_monitor(&monitor);
-                    flash_window.set_exclusive_zone(-1);
-                    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-                        flash_window.set_anchor(edge, true);
-                    }
-                } else {
-                    flash_window.fullscreen();
-                }
-
-                flash_window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
-                flash_window.present();
-                flash_windows.push(flash_window);
-            }
-        }
-
-        let is_clipboard_only = capture_path_clone.is_none();
-        let app_for_flash = application.clone();
-        let mut step = 0u8;
-        if !flash_windows.is_empty() {
-            glib::timeout_add_local(Duration::from_millis(25), move || {
-                step += 1;
-                let opacity = 0.85 * (1.0 - f64::from(step) / 8.0);
-                for win in &flash_windows {
-                    win.set_opacity(opacity.max(0.0));
-                }
-                if step >= 8 {
-                    for win in &flash_windows {
-                        win.close();
-                    }
-                    if is_clipboard_only {
-                        app_for_flash.quit();
-                    }
-                    ControlFlow::Break
-                } else {
-                    ControlFlow::Continue
-                }
-            });
-        } else if is_clipboard_only {
-            application.quit();
-        }
-
-        // 2. Si se guardó en disco, mostrar miniatura flotante en la esquina inferior derecha
-        if let Some(ref path) = capture_path_clone {
-            let window = ApplicationWindow::builder()
-                .application(application)
-                .title("Captura de pantalla")
-                .css_classes(["malus-screenshot-thumbnail"])
-                .default_width(360)
-                .default_height(300)
-                .build();
-
-            if gtk4_layer_shell::is_supported() {
-                window.init_layer_shell();
-                window.set_layer(Layer::Overlay);
-                window.set_namespace("malus-screenshot-thumbnail");
-                // Anclar a esquina inferior derecha estilo macOS
-                window.set_anchor(Edge::Bottom, true);
-                window.set_anchor(Edge::Right, true);
-                window.set_margin(Edge::Bottom, 20);
-                window.set_margin(Edge::Right, 20);
-            } else {
-                window.set_decorated(false);
-                window.set_default_size(360, 300);
-            }
-
-            let card = GtkBox::builder()
-                .orientation(Orientation::Vertical)
-                .css_classes(["thumbnail-card"])
-                .spacing(4)
-                .build();
-
-            let is_video = mode == CaptureMode::Record
-                || path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e == "webm" || e == "mp4" || e == "mkv");
-
-            if !is_video {
-                let preview_img = Picture::for_filename(path);
-                preview_img.set_content_fit(gtk4::ContentFit::Contain);
-                preview_img.set_can_shrink(true);
-                preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
-                card.append(&preview_img);
-            }
-
-            let title_label = Label::builder()
-                .label(match mode {
-                    CaptureMode::Toolbar => "Captura de Pantalla",
-                    CaptureMode::Area => "Captura de Área",
-                    CaptureMode::Window => "Captura de Ventana",
-                    CaptureMode::Full => "Captura de Pantalla Completa",
-                    CaptureMode::Ocr => "Texto Extraído",
-                    CaptureMode::Record => "Grabación de Pantalla",
-                })
-                .css_classes(["thumbnail-title"])
-                .build();
-            card.append(&title_label);
-
-            let sub_label = Label::builder()
-                .label(&path.display().to_string())
-                .css_classes(["thumbnail-subtitle"])
-                .build();
-            sub_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-            sub_label.set_max_width_chars(42);
-            card.append(&sub_label);
-
-            let status_label = Label::builder()
-                .label(&clipboard_status)
-                .wrap(true)
-                .css_classes(["thumbnail-subtitle"])
-                .build();
-            card.append(&status_label);
-
-            let btn_box = GtkBox::builder()
-                .orientation(Orientation::Horizontal)
-                .spacing(6)
-                .build();
-
-            if is_video {
-                let open_btn = Button::builder()
-                    .label("Reproducir")
-                    .css_classes(["action-btn", "suggested-action"])
-                    .build();
-                let path_clone = path.clone();
-                let win_clone = window.clone();
-                open_btn.connect_clicked(move |_| {
-                    let _ = Command::new("xdg-open").arg(&path_clone).spawn();
-                    win_clone.close();
-                });
-                btn_box.append(&open_btn);
-
-                let folder_btn = Button::builder()
-                    .label("Mostrar en carpeta")
-                    .css_classes(["action-btn"])
-                    .build();
-                let path_clone2 = path.clone();
-                let win_clone2 = window.clone();
-                folder_btn.connect_clicked(move |_| {
-                    if let Some(parent) = path_clone2.parent() {
-                        let _ = Command::new("xdg-open").arg(parent).spawn();
-                    }
-                    win_clone2.close();
-                });
-                btn_box.append(&folder_btn);
-            } else {
-                let copy_btn = Button::builder()
-                    .label("Copiar")
-                    .css_classes(["action-btn", "suggested-action"])
-                    .build();
-                let win_clone = window.clone();
-                let status_label_for_copy = status_label.clone();
-                let capture_path_for_copy = path.clone();
-                copy_btn.connect_clicked(move |_| {
-                    match copy_image_to_clipboard(&capture_path_for_copy) {
-                        Ok(()) => {
-                            info!("Captura copiada al portapapeles.");
-                            win_clone.close();
-                        }
-                        Err(error) => {
-                            let message = format!("No se pudo copiar al portapapeles: {error:#}");
-                            status_label_for_copy.set_label(&message);
-                            tracing::error!("{message}");
-                        }
-                    }
-                });
-                btn_box.append(&copy_btn);
-            }
-
-            let dismiss_btn = Button::builder()
-                .label("Cerrar")
-                .css_classes(["action-btn"])
-                .build();
-            let win_clone2 = window.clone();
-            dismiss_btn.connect_clicked(move |_| {
-                win_clone2.close();
-            });
-            btn_box.append(&dismiss_btn);
-
-            card.append(&btn_box);
-            window.set_child(Some(&card));
-            window.present();
-
-            // Auto-cerrar miniatura tras 6 segundos si el usuario no interactúa
-            let win_auto = window.clone();
-            glib::timeout_add_local(Duration::from_secs(6), move || {
-                win_auto.close();
-                ControlFlow::Break
-            });
-        }
-    });
-
-    app.run_with_args(&["malus-de-screenshot"]);
+fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, _clipboard_status: String) {
+    let is_video = mode == CaptureMode::Record
+        || capture_path.as_ref().is_some_and(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e == "webm" || e == "mp4" || e == "mkv")
+        });
+    let kind = if is_video {
+        preview_ui::PreviewKind::Video
+    } else {
+        preview_ui::PreviewKind::Image
+    };
+    preview_ui::show_capture_preview_flow(kind, capture_path, !is_video, copy_image_to_clipboard);
 }

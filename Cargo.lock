@@ -2133,6 +2133,7 @@ dependencies = [
  "libadwaita",
  "malus-de-common",
  "png",
+ "serde_json",
  "tracing",
  "zbus",
 ]

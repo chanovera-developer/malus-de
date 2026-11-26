@@ -44,6 +44,15 @@ enum Commands {
     /// Extrae texto de la pantalla mediante OCR (Super + Shift + T)
     Ocr,
 
+    /// Abre la barra interactiva de captura de pantalla (Super + Shift + 5)
+    Screenshot,
+
+    /// Controla la grabación de pantalla del escritorio (iniciar o detener)
+    Recording {
+        #[command(subcommand)]
+        action: RecordingAction,
+    },
+
     /// Controla la integración móvil con Malus Link (KDE Connect)
     Link {
         #[command(subcommand)]
@@ -87,6 +96,14 @@ enum Commands {
 
     /// Cierra la sesión actual de Malus DE de forma limpia y vuelve al gestor de sesión (GDM)
     Logout,
+}
+
+#[derive(Subcommand, Debug)]
+enum RecordingAction {
+    /// Abre la barra de captura en modo grabación de pantalla
+    Start,
+    /// Detiene la grabación de pantalla activa inmediatamente (equivale a ⌃⌘⎋ / ⇧⌘R)
+    Stop,
 }
 
 #[derive(Subcommand, Debug)]
@@ -297,6 +314,41 @@ fn main() -> Result<()> {
         Commands::Ocr => {
             println!("Iniciando extractor OCR de pantalla (Super + Shift + T)...");
         }
+        Commands::Screenshot => {
+            if let Err(err) = malus_de_common::ipc::IpcClient::send_command(
+                malus_de_common::ipc::IpcMessage::TriggerScreenshot {
+                    interactive: true,
+                    record_video: false,
+                },
+            ) {
+                eprintln!("❌ No se pudo abrir la captura de pantalla: {err}");
+            } else {
+                println!("📸 Barra interactiva de captura abierta.");
+            }
+        }
+        Commands::Recording { action } => match action {
+            RecordingAction::Start => {
+                if let Err(err) = malus_de_common::ipc::IpcClient::send_command(
+                    malus_de_common::ipc::IpcMessage::TriggerScreenshot {
+                        interactive: true,
+                        record_video: true,
+                    },
+                ) {
+                    eprintln!("❌ No se pudo abrir el modo de grabación: {err}");
+                } else {
+                    println!("🎬 Barra de captura abierta en modo grabación.");
+                }
+            }
+            RecordingAction::Stop => {
+                if let Err(err) = malus_de_common::ipc::IpcClient::send_command(
+                    malus_de_common::ipc::IpcMessage::StopScreenRecording,
+                ) {
+                    eprintln!("❌ No se pudo detener la grabación de pantalla: {err}");
+                } else {
+                    println!("⏹ Solicitud de detención de grabación enviada al compositor.");
+                }
+            }
+        },
         Commands::Link { action } => match action {
             LinkAction::Status => {
                 println!("📱 Malus Link: Buscando dispositivos vinculados...");

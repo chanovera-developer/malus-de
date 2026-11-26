@@ -23,7 +23,7 @@ use smithay::{
             },
             gles::{GlesRenderer, GlesTexture},
             utils::draw_render_elements,
-            Bind, Color32F, ExportMem, Frame, ImportDma, ImportMem, Renderer, Texture,
+            Bind, Color32F, Frame, ImportDma, ImportMem, Renderer, Texture,
         },
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{all_gpus, primary_gpu, UdevBackend, UdevEvent},
@@ -2611,9 +2611,21 @@ pub fn run_drm() -> Result<()> {
 
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
+                                let is_r = sym == keysyms::KEY_r.into() || sym == keysyms::KEY_R.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
                                 let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
+                                let is_esc_early = sym == keysyms::KEY_Escape.into();
+
+                                // Detener grabación de pantalla activa con ⌃⌘⎋ (macOS nativo) o ⇧⌘R
+                                if state.active_screen_recording.is_some()
+                                    && ((has_ctrl && has_super && is_esc_early)
+                                        || (has_super && has_shift && is_r))
+                                {
+                                    info!("⏹ Atajo para detener grabación de pantalla detectado");
+                                    state.stop_screen_recording();
+                                    return FilterResult::Intercept(());
+                                }
 
                                 if state.screenshot_ui.is_open() {
                                     if state.screenshot_ui.handle_key_press(sym, *modifiers) {
@@ -2829,12 +2841,10 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
                     if state.screenshot_ui.is_open() {
-                        let output_geo = state
-                            .space
-                            .outputs()
-                            .next()
-                            .and_then(|o| state.space.output_geometry(o))
-                            .unwrap_or_default();
+                        let output_geo = state.screenshot_ui_output_geometry();
+                        let win_rect =
+                            state.window_rect_under_point_in_output(output_geo, point);
+                        state.screenshot_ui.update_hovered_window(win_rect);
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
@@ -2903,7 +2913,13 @@ pub fn run_drm() -> Result<()> {
                             state.spotlight.update_pointer_motion(spot_output_geo, point);
                         }
                         if state.screenshot_ui.is_open() {
-                            state.screenshot_ui.update_pointer_motion(output_geo, point);
+                            let ui_output_geo = state.screenshot_ui_output_geometry();
+                            let win_rect =
+                                state.window_rect_under_point_in_output(ui_output_geo, point);
+                            state.screenshot_ui.update_hovered_window(win_rect);
+                            state
+                                .screenshot_ui
+                                .update_pointer_motion(ui_output_geo, point);
                         }
                         state.update_spotlight_drag_dock_hover(point);
                         let _ = state.handle_app_switcher_deck_pointer_motion(point);
@@ -2965,12 +2981,10 @@ pub fn run_drm() -> Result<()> {
                     }
                     if is_pressed {
                         if state.screenshot_ui.is_open() {
-                            let output_geo = state
-                                .space
-                                .outputs()
-                                .next()
-                                .and_then(|o| state.space.output_geometry(o))
-                                .unwrap_or_default();
+                            let output_geo = state.screenshot_ui_output_geometry();
+                            let win_rect =
+                                state.window_rect_under_point_in_output(output_geo, point);
+                            state.screenshot_ui.update_hovered_window(win_rect);
                             match state.screenshot_ui.handle_pointer_button(
                                 output_geo,
                                 point,
@@ -3232,12 +3246,7 @@ pub fn run_drm() -> Result<()> {
                         }
                     } else {
                         if state.screenshot_ui.is_open() {
-                            let output_geo = state
-                                .space
-                                .outputs()
-                                .next()
-                                .and_then(|o| state.space.output_geometry(o))
-                                .unwrap_or_default();
+                            let output_geo = state.screenshot_ui_output_geometry();
                             match state.screenshot_ui.handle_pointer_button(
                                 output_geo,
                                 point,
@@ -3789,6 +3798,9 @@ pub fn run_drm() -> Result<()> {
                 }
                 let out_name = s.output.name();
                 compositor_anim_active
+                    || state.active_screen_recording.as_ref().is_some_and(|rec| {
+                        rec.matches_output(&out_name) && rec.needs_render_wakeup(Instant::now())
+                    })
                     || s.pending_damage_buffers > 0
                     || s.full_damage_buffers > 0
                     || s.last_commit_counter != state.surface_commit_counter
@@ -3824,6 +3836,23 @@ pub fn run_drm() -> Result<()> {
         state.popups.cleanup();
         state.active_popups.retain(|p| p.alive());
         state.cleanup_stale_surfaces();
+
+        if let Some(ref mut session) = state.active_screen_recording {
+            let rec_now = Instant::now();
+            if session.pending_mapping_ready(rec_now) {
+                session.flush_pending_mapping(&mut renderer);
+            }
+            if rec_now.duration_since(session.last_status_broadcast) >= Duration::from_secs(1) {
+                session.last_status_broadcast = rec_now;
+                let elapsed = session.start_time.elapsed().as_secs();
+                state
+                    .ipc_broadcaster
+                    .broadcast(&malus_de_common::ipc::IpcMessage::ScreenRecordingStatus {
+                        is_recording: true,
+                        elapsed_secs: elapsed,
+                    });
+            }
+        }
 
         // 🎨 RENDERIZADO GPU REAL A CADA MONITOR FÍSICO
         let mut visible_surface_ids = std::collections::HashSet::new();
@@ -3894,6 +3923,10 @@ pub fn run_drm() -> Result<()> {
                         || state.theme_transition_started_at.is_some()
                         || state.workspace_transition.is_some()
                         || !state.pending_screenshot_requests.is_empty()
+                        || state
+                            .active_screen_recording
+                            .as_ref()
+                            .is_some_and(|s| s.matches_output(&out_name) && !s.first_frame_captured)
                         || state.spotlight.should_render_on_output(&out_name)
                         || state.spotlight.has_active_drag_or_poof()
                         || state.screenshot_ui.should_render_on_output(&out_name)
@@ -5212,6 +5245,11 @@ pub fn run_drm() -> Result<()> {
                         .max(damage_buffers_per_event);
                 }
 
+                let recording_due_on_output = state
+                    .active_screen_recording
+                    .as_ref()
+                    .is_some_and(|s| s.matches_output(&out_name) && !s.first_frame_captured);
+
                 let has_active_effects = !active_genies.is_empty()
                     || black_hole_active_on_output
                     || !state.snap_transitions.is_empty()
@@ -5221,6 +5259,7 @@ pub fn run_drm() -> Result<()> {
                     || state.workspace_transition.is_some()
                     || workspace_switch_pending
                     || screenshot_active
+                    || recording_due_on_output
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
                     || snap_layouts_frame.is_some()
@@ -5592,6 +5631,7 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 if screenshot_active
+                    || recording_due_on_output
                     || theme_capture_request.is_some()
                     || state.theme_transition_started_at.is_some()
                     || workspace_switch_pending
@@ -7606,33 +7646,27 @@ pub fn run_drm() -> Result<()> {
                     }
 
                     if !session_locked {
+                        let out_name_rec = out_surface.output.name();
                         if let Some(ref mut session) = state.active_screen_recording {
-                            let interval = std::time::Duration::from_millis(
-                                (1000 / session.target_fps.max(1)) as u64,
-                            );
-                            if now.duration_since(session.last_frame) >= interval {
-                                session.last_frame = now;
-                                let crop = session
-                                    .rect
-                                    .unwrap_or_else(|| Rectangle::from_size(out_surface.size));
-                                let cl_x = crop.loc.x.clamp(0, out_surface.size.w);
-                                let cl_y = crop.loc.y.clamp(0, out_surface.size.h);
-                                let cl_w = (crop.size.w.min(out_surface.size.w - cl_x) & !1).max(2);
-                                let cl_h = (crop.size.h.min(out_surface.size.h - cl_y) & !1).max(2);
+                            if session.matches_output(&out_name_rec) && session.frame_due(now) {
+                                let crop = session.rect.unwrap_or_else(|| {
+                                    Rectangle::from_size(
+                                        (session.frame_width as i32, session.frame_height as i32)
+                                            .into(),
+                                    )
+                                });
+                                let cl_x = crop.loc.x.clamp(0, (out_surface.size.w - 2).max(0));
+                                let cl_y = crop.loc.y.clamp(0, (out_surface.size.h - 2).max(0));
+                                let cl_w = (session.frame_width as i32)
+                                    .min(out_surface.size.w - cl_x)
+                                    .max(2);
+                                let cl_h = (session.frame_height as i32)
+                                    .min(out_surface.size.h - cl_y)
+                                    .max(2);
                                 let region =
                                     Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
 
-                                if let Ok(mapping) = renderer.copy_framebuffer(
-                                    &target,
-                                    region,
-                                    smithay::backend::allocator::Fourcc::Abgr8888,
-                                ) {
-                                    if let Ok(pixels) = renderer.map_texture(&mapping) {
-                                        if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                            session.push_frame_slice(pixels);
-                                        }
-                                    }
-                                }
+                                session.capture_frame_async(&mut renderer, &target, region, now);
                             }
                         }
                     }

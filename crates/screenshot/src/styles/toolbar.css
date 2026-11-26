@@ -5,14 +5,16 @@ window.malus-screenshot-selector {
 .screenshot-toolbar-pill {
     background-color: rgba(30, 30, 32, 0.88);
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 26px;
-    padding: 6px 12px;
+    border-radius: 22px;
+    padding: 6px;
     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
 }
 
 .screenshot-pill-btn {
-    border-radius: 18px;
-    padding: 6px 12px;
+    border-radius: 12px;
+    padding: 0 10px;
+    min-height: 32px;
+    min-width: 32px;
     color: #ffffff;
     background: transparent;
     border: none;
@@ -28,28 +30,36 @@ window.malus-screenshot-selector {
     background-color: rgba(255, 255, 255, 0.22);
 }
 
+/* Radio concéntrico al contorno de 22 px del widget de 44 px de alto (22 px - 6 px = 16 px) */
 .screenshot-action-btn {
-    border-radius: 18px;
-    padding: 6px 20px;
+    border-radius: 16px;
+    min-height: 32px;
+    padding: 0 18px;
     font-weight: 600;
-    font-size: 13px;
-    color: white;
+    font-size: 12.5px;
+    color: @accent_fg_color;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: none;
 }
 
 .screenshot-action-btn.capture {
-    background-color: #007aff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 .screenshot-action-btn.capture:hover {
-    background-color: #0066d6;
+    background-color: shade(@accent_bg_color, 1.08);
+    color: @accent_fg_color;
 }
 
 .screenshot-action-btn.record {
     background-color: #e02424;
+    color: #ffffff;
 }
 
 .screenshot-action-btn.record:hover {
-    background-color: #c81e1e;
+    background-color: #ef3333;
+    color: #ffffff;
 }
 
 .screenshot-recording-indicator {

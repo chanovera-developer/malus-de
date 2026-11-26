@@ -1,32 +1,302 @@
-window.malus-screenshot-thumbnail {
+/* ========================================================================= */
+/* Interfaz 1: Miniatura flotante estilo macOS (Captura-pantalla1.png)       */
+/* ========================================================================= */
+
+window.malus-screenshot-thumbnail,
+window.malus-screenshot-thumbnail.background {
+    background: transparent;
+    background-color: transparent;
+    box-shadow: none;
+    border: none;
+}
+
+.thumbnail-photo-frame {
+    background-color: #ffffff;
+    border: 4px solid #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.50), 0 2px 8px rgba(0, 0, 0, 0.25);
+    margin: 8px;
+    padding: 0;
+    transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.thumbnail-photo-frame:hover {
+    box-shadow: 0 16px 38px rgba(0, 0, 0, 0.60), 0 0 0 2px @accent_bg_color;
+}
+
+.thumbnail-photo-image {
+    border-radius: 6px;
+}
+
+.thumbnail-video-placeholder {
+    background-color: #1c1c1e;
+    border-radius: 6px;
+    color: #ffffff;
+}
+
+.thumbnail-video-icon {
+    color: #ffffff;
+}
+
+.thumbnail-video-caption {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+}
+
+/* ========================================================================= */
+/* Interfaz 2: Ventana de previsualización idéntica a Quick Look en Branches */
+/* ========================================================================= */
+
+window.branches-quicklook-window,
+window.branches-quicklook-window.background {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.branches-quicklook-container {
+    background-color: alpha(@window_bg_color, 0.96);
+    border-radius: 20px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    color: @window_fg_color;
+    opacity: 0.0;
+    transform: scale(0.90);
+}
+
+.branches-quicklook-container.ql-open {
+    opacity: 1.0;
+    transform: scale(1.0);
+    transition: transform 175ms cubic-bezier(0.16, 1, 0.3, 1), opacity 145ms ease-out;
+}
+
+.branches-quicklook-container.ql-closing {
+    opacity: 0.0;
+    transform: scale(0.92);
+    transition: transform 135ms cubic-bezier(0.4, 0, 1, 1), opacity 125ms ease-in;
+}
+
+.branches-quicklook-header {
+    min-height: 42px;
+    padding: 0 10px 0 12px;
+    background-color: transparent;
+    border-bottom: none;
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+}
+
+button.branches-quicklook-close-btn,
+button.branches-quicklook-hud-btn {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background-image: none;
+    background-color: alpha(@window_fg_color, 0.44);
+    color: @window_bg_color;
+    transition: background-color 120ms ease;
+}
+
+button.branches-quicklook-close-btn:hover,
+button.branches-quicklook-hud-btn:hover {
+    background-color: alpha(@window_fg_color, 0.64);
+    color: @window_bg_color;
+}
+
+button.branches-quicklook-close-btn image,
+button.branches-quicklook-hud-btn image {
+    color: @window_bg_color;
+}
+
+button.branches-quicklook-icon-btn,
+menubutton.branches-quicklook-icon-btn > button {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background-image: none;
+    background: transparent;
+    color: alpha(@window_fg_color, 0.78);
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+button.branches-quicklook-icon-btn:hover,
+menubutton.branches-quicklook-icon-btn > button:hover {
+    background-color: alpha(@window_fg_color, 0.09);
+    color: @window_fg_color;
+}
+
+button.branches-quicklook-icon-btn:checked {
+    background-color: alpha(@accent_bg_color, 0.18);
+    color: @accent_bg_color;
+}
+
+.branches-quicklook-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: @window_fg_color;
+}
+
+entry.branches-quicklook-title-entry {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    box-shadow: none;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: @window_fg_color;
+    padding: 2px 6px;
+    min-height: 24px;
+}
+
+entry.branches-quicklook-title-entry:hover {
+    background-color: alpha(@window_fg_color, 0.06);
+    border-color: alpha(@window_fg_color, 0.10);
+}
+
+entry.branches-quicklook-title-entry:focus-within {
+    background-color: alpha(@window_bg_color, 0.72);
+    border-color: @accent_bg_color;
+}
+
+.screenshot-editor-ext-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.45);
+    margin-left: -4px;
+}
+
+.screenshot-editor-feedback {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: @accent_bg_color;
+}
+
+.screenshot-editor-feedback.error {
+    color: #ef4444;
+}
+
+button.branches-quicklook-open-pill {
+    min-height: 26px;
+    padding: 0 12px;
+    margin: 0 0 0 4px;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background-image: none;
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background-color 120ms ease;
+}
+
+button.branches-quicklook-open-pill:hover {
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+button.branches-quicklook-open-pill:active {
+    background-color: alpha(@window_fg_color, 0.20);
+}
+
+.branches-quicklook-btn {
+    padding: 4px 14px;
+    font-size: 11px;
+    border-radius: 6px;
+}
+
+.branches-quicklook-content {
+    background-color: transparent;
+    border-bottom-left-radius: 20px;
+    border-bottom-right-radius: 20px;
+}
+
+.branches-quicklook-image-stage {
+    margin: 0 8px 8px 8px;
+}
+
+.branches-quicklook-image-frame {
+    border-radius: 12px;
     background-color: transparent;
 }
 
-.thumbnail-card {
-    background-color: alpha(@window_bg_color, 0.90);
-    border: 1px solid alpha(@window_fg_color, 0.16);
-    border-radius: 14px;
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
-    padding: 10px;
-    min-width: 240px;
+.branches-quicklook-image {
+    border-radius: 12px;
 }
 
-.thumbnail-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: @window_fg_color;
-    margin-bottom: 2px;
+.branches-quicklook-video-stage {
+    background-color: #101114;
+    border-radius: 8px;
 }
 
-.thumbnail-subtitle {
-    font-size: 11px;
-    color: alpha(@window_fg_color, 0.68);
-    margin-bottom: 6px;
+.branches-quicklook-footer {
+    padding: 4px 12px;
 }
 
-.action-btn {
-    border-radius: 6px;
+/* Sub-barra de Marcación y menú Compartir */
+.screenshot-markup-bar {
     padding: 4px 10px;
+    margin: 0 10px 6px 10px;
+    border-radius: 10px;
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+button.screenshot-markup-tool {
+    min-height: 24px;
+    padding: 2px 10px;
+    border-radius: 8px;
     font-size: 12px;
     font-weight: 500;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: @window_fg_color;
+}
+
+button.screenshot-markup-tool:hover {
+    background-color: alpha(@window_fg_color, 0.10);
+}
+
+button.screenshot-markup-tool:checked {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+button.screenshot-markup-color-dot {
+    min-width: 16px;
+    min-height: 16px;
+    padding: 0;
+    border-radius: 999px;
+    border: 1.5px solid rgba(255, 255, 255, 0.65);
+    box-shadow: none;
+}
+
+button.markup-dot-red { background-color: #f53d38; }
+button.markup-dot-yellow { background-color: #fccc14; }
+button.markup-dot-green { background-color: #34cc59; }
+button.markup-dot-blue { background-color: #0a84ff; }
+button.markup-dot-white { background-color: #ffffff; }
+
+button.screenshot-share-row {
+    border-radius: 8px;
+    padding: 5px 10px;
+    font-size: 13px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+button.screenshot-share-row:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
