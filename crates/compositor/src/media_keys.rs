@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cairo::{Context, Format, ImageSurface, LinearGradient, Operator};
+use cairo::{Context, Format, ImageSurface, Operator};
 use smithay::{
     backend::{
         allocator::Fourcc,
@@ -894,12 +894,10 @@ impl MediaKeysState {
             let _ = ctx.paint();
             ctx.set_operator(Operator::Over);
 
-            // Fondo Liquid Glass translúcido con border-radius squircle (n = 4.2) idéntico a la capa de blur y sombra
+            // Fondo semitransparente con blur GPU (mismo diseño translúcido del Centro de Control y popovers)
             let glass_scale = malus_de_common::config::current_liquid_glass_scale();
-            let a_top =
-                malus_de_common::config::scaled_liquid_glass_alpha(0.36, glass_scale, 0.16, 0.72);
-            let a_bot =
-                malus_de_common::config::scaled_liquid_glass_alpha(0.44, glass_scale, 0.20, 0.78);
+            let fill_a =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.72, glass_scale, 0.14, 0.96);
             append_squircle_path(
                 &ctx,
                 0.0,
@@ -909,76 +907,53 @@ impl MediaKeysState {
                 OSD_CORNER_RADIUS,
                 SQUIRCLE_EXPONENT,
             );
-            let bg_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
             if is_dark {
-                bg_grad.add_color_stop_rgba(0.0, 0.18, 0.20, 0.24, a_top);
-                bg_grad.add_color_stop_rgba(1.0, 0.12, 0.14, 0.18, a_bot);
+                ctx.set_source_rgba(30.0 / 255.0, 30.0 / 255.0, 36.0 / 255.0, fill_a);
             } else {
-                bg_grad.add_color_stop_rgba(0.0, 0.28, 0.34, 0.42, a_top);
-                bg_grad.add_color_stop_rgba(1.0, 0.20, 0.25, 0.33, a_bot);
+                ctx.set_source_rgba(244.0 / 255.0, 246.0 / 255.0, 250.0 / 255.0, fill_a);
             }
-            let _ = ctx.set_source(&bg_grad);
             let _ = ctx.fill();
 
-            // Halo interno de refracción Liquid Glass (squircle concéntrico)
+            // Borde sutil acorde al tema (sin halo de refracción ni bisel especular)
             append_squircle_path(
                 &ctx,
-                1.8,
-                1.8,
-                (cw - 3.6).max(2.0),
-                (ch - 3.6).max(2.0),
-                (OSD_CORNER_RADIUS - 1.8).max(1.0),
+                0.5,
+                0.5,
+                (cw - 1.0).max(2.0),
+                (ch - 1.0).max(2.0),
+                (OSD_CORNER_RADIUS - 0.5).max(1.0),
                 SQUIRCLE_EXPONENT,
             );
-            ctx.set_line_width(2.2);
-            let lens_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
-            lens_grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.20);
-            lens_grad.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.08);
-            lens_grad.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.16);
-            let _ = ctx.set_source(&lens_grad);
+            ctx.set_line_width(1.0);
+            if is_dark {
+                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.15);
+            } else {
+                ctx.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+            }
             let _ = ctx.stroke();
 
-            // Bisel especular brillante en el perímetro squircle
-            append_squircle_path(
-                &ctx,
-                0.85,
-                0.85,
-                (cw - 1.7).max(2.0),
-                (ch - 1.7).max(2.0),
-                (OSD_CORNER_RADIUS - 0.85).max(1.0),
-                SQUIRCLE_EXPONENT,
-            );
-            ctx.set_line_width(1.1);
-            let rim_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
-            rim_grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.76);
-            rim_grad.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.32);
-            rim_grad.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.62);
-            let _ = ctx.set_source(&rim_grad);
-            let _ = ctx.stroke();
+            // Colores de contenido adaptados al tema claro/oscuro
+            let (fg_r, fg_g, fg_b) = if is_dark {
+                (1.0, 1.0, 1.0)
+            } else {
+                (0.11, 0.12, 0.15)
+            };
+            let (track_r, track_g, track_b, track_a) = if is_dark {
+                (1.0, 1.0, 1.0, 0.22)
+            } else {
+                (0.0, 0.0, 0.0, 0.14)
+            };
+            let active_a = if is_dark { 0.95 } else { 0.88 };
 
-            // Fino contorno exterior de definición squircle
-            append_squircle_path(
-                &ctx,
-                0.3,
-                0.3,
-                (cw - 0.6).max(2.0),
-                (ch - 0.6).max(2.0),
-                (OSD_CORNER_RADIUS - 0.3).max(1.0),
-                SQUIRCLE_EXPONENT,
-            );
-            ctx.set_line_width(0.6);
-            ctx.set_source_rgba(0.0, 0.0, 0.0, 0.26);
-            let _ = ctx.stroke();
-
-            // Icono vectorial blanco puro a la izquierda
+            // Icono vectorial a la izquierda
             draw_osd_vector_icon(
                 &ctx,
                 osd.icon,
                 36.0,
                 ch * 0.5,
-                1.0,
-                1.0,
-                1.0,
+                fg_r,
+                fg_g,
+                fg_b,
                 osd.muted_style,
             );
 
@@ -1006,20 +981,20 @@ impl MediaKeysState {
 
                     // Pista inactiva del segmento
                     append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
-                    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+                    ctx.set_source_rgba(track_r, track_g, track_b, track_a);
                     let _ = ctx.fill();
 
-                    // Relleno blanco activo (completo o fraccional para pasos finos con Shift/Alt)
+                    // Relleno activo (completo o fraccional para pasos finos con Shift/Alt)
                     if seg_fill >= 0.99 {
                         append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
-                        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                        ctx.set_source_rgba(fg_r, fg_g, fg_b, active_a);
                         let _ = ctx.fill();
                     } else if seg_fill > 0.04 {
                         let _ = ctx.save();
                         ctx.rectangle(sx, bar_y, seg_w * seg_fill, bar_h);
                         ctx.clip();
                         append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
-                        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                        ctx.set_source_rgba(fg_r, fg_g, fg_b, active_a);
                         let _ = ctx.fill();
                         let _ = ctx.restore();
                     }
@@ -1032,7 +1007,7 @@ impl MediaKeysState {
                     cairo::FontWeight::Bold,
                 );
                 ctx.set_font_size(13.5);
-                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.96);
+                ctx.set_source_rgba(fg_r, fg_g, fg_b, if is_dark { 0.94 } else { 0.92 });
                 let label = if !osd.subtitle.is_empty() {
                     &osd.subtitle
                 } else {
