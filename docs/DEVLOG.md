@@ -549,7 +549,7 @@ Implementación integral de las 6 fases planificadas a partir de [`0006-branches
 - **Respaldos en compositor y shell:** `is_dark_color_scheme()` (`crates/compositor/src/state.rs`), `CURRENT_IS_DARK` (`crates/wallpaper/src/main.rs`) y `ControlCenterModel::default().dark_mode` (`crates/render/src/popover.rs`) ahora parten de `false` (modo claro).
 
 ### 2. Instalador en Un Solo Comando y Soporte `kmscon` en Fedora 45+
-- **Instalador todo-en-uno (`scripts/install-fedora-minimal.sh`, `docs/FEDORA_STANDALONE_INSTALL.md`):** Añadido comando único estilo `curl | bash` (`--dir`, `--branch`, `--tty-autostart`, `--greetd`, `--skip-build`) para instalar dependencias runtime y `-devel` (incluyendo `gdk-pixbuf2-devel`, `libdrm-devel`, `wayland-devel` y `pam`), clonar/compilar el workspace en `Release` y desplegar la sesión.
+- **Instalador todo-en-uno (`scripts/install-fedora-minimal.sh`, `docs/STANDALONE_INSTALL.md`):** Añadido comando único estilo `curl | bash` (`--dir`, `--branch`, `--tty-autostart`, `--greetd`, `--skip-build`) para instalar dependencias runtime y `-devel` (incluyendo `gdk-pixbuf2-devel`, `libdrm-devel`, `wayland-devel` y `pam`), clonar/compilar el workspace en `Release` y desplegar la sesión.
 - **Liberación automática de DRM en `kmscon` (`scripts/malus-session`):** En Fedora 45+ (`pts/0` bajo `kmscon`), `malus-session` detecta la sesión PTY de `kmscon` antes de redirigir stdout a `tee` y se envuelve automáticamente con `kmscon-launch-gui` para evitar el error `EBUSY (Device or resource busy)` al abrir `/dev/dri/card*`.
 
 ### 3. Validación
@@ -591,7 +591,7 @@ Implementación integral de las 6 fases planificadas a partir de [`0006-branches
 * **Problema:** al fallar la detección de `primary_gpu` o en laptops híbridas / con pantalla interna retirada (donde `card0` puede ser `simpledrm` o una iGPU sin salidas conectadas), [`drm.rs`](../crates/compositor/src/backend/drm.rs) intentaba abrir un único nodo o caía al respaldo fijo `/dev/dri/card1`, abortando con `"Error al abrir nodo DRM mediante libseat"`.
 * **Solución (`scan_dev_dri_cards`, `sysfs_drm_card_score`, `prioritize_drm_gpu_candidates`, `open_first_working_drm_gpu`):** recopila y deduplica `primary_gpu`, `all_gpus` y `/dev/dri/card*`, priorizando tarjetas KMS reales (descartando `simple-framebuffer`/`vgem`) que tengan al menos un conector en estado `connected`, y prueba en cascada `libseat` (`session.open`), `DrmDevice`, `GbmDevice`, `EGLDisplay` y `GlesRenderer`.
 
-### 2. Guía Fedora Minimal ([`FEDORA_STANDALONE_INSTALL.md`](../docs/FEDORA_STANDALONE_INSTALL.md))
+### 2. Guía Fedora Minimal ([`STANDALONE_INSTALL.md`](../docs/STANDALONE_INSTALL.md))
 * Retirado `exec` en el arranque automático de `~/.bash_profile` para evitar bucles de expulsión al `login:` si falla el compositor.
 * Sustituido `mesa-libgbm-devel` por `'pkgconfig(gbm)'` en la lista de dependencias de compilación.
 

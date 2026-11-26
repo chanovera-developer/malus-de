@@ -90,7 +90,7 @@ Malus DE se prueba principalmente en Fedora 45 y usa una pila moderna de Linux:
 Puedes instalar las dependencias, compilar e instalar la sesión de Malus DE en cualquier edición de Fedora (Workstation/GNOME, KDE Plasma, Xfce, Spins o Fedora Minimal) con un solo comando:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash
 ```
 
 Al finalizar, cierra sesión y selecciona **Malus DE** en tu gestor de arranque (GDM, SDDM, LightDM, etc.), o ejecuta `/usr/local/bin/malus-session` desde una TTY.
@@ -116,7 +116,7 @@ Para arrancar la sesión de desarrollo se usa el lanzador incluido:
 
 La documentación de instalación y soporte para Fedora está en:
 
-- [docs/FEDORA_STANDALONE_INSTALL.md](./docs/FEDORA_STANDALONE_INSTALL.md)
+- [docs/STANDALONE_INSTALL.md](./docs/STANDALONE_INSTALL.md)
 - [docs/PACKAGE_MANIFEST.md](./docs/PACKAGE_MANIFEST.md)
 
 ## Documentación

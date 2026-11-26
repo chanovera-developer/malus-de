@@ -1036,7 +1036,7 @@ malus-de/
 │
 ├── docs/                               # Documentación y Registros de Decisiones (ADRs)
 │   ├── DEVLOG.md                       # Bitácora técnica de desarrollo
-│   ├── FEDORA_STANDALONE_INSTALL.md    # Guía de instalación standalone en Fedora
+│   ├── STANDALONE_INSTALL.md    # Guía de instalación standalone en Fedora
 │   ├── PACKAGE_MANIFEST.md             # Manifiesto de paquetes del sistema
 │   ├── THEME_DEVELOPMENT_GUIDE.md      # Guía de temas y estilos
 │   └── decisiones/

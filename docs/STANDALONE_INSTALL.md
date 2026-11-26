@@ -1,15 +1,15 @@
-# Guía de Instalación en Fedora (Cualquier Escritorio o Modo Terminal Minimal)
+# Guía de Instalación
 
-Esta guía documenta el procedimiento completo para desplegar **Malus DE** tanto sobre **cualquier edición de Fedora con escritorio preinstalado** (Workstation/GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Sway, etc.) como sobre una instalación base de **Fedora en modo terminal puro (Minimal / Everything)**, sin depender de `gnome-shell` ni `mutter`.
+Esta guía documenta el procedimiento completo para desplegar **Malus DE** tanto sobre **cualquier edición de Fedora|Arch|Debian|Ubuntu con escritorio preinstalado** como sobre una instalación base de **Fedora|Arch|Debian|Ubuntu en modo terminal puro (Minimal / Everything)**, sin depender de `gnome-shell` ni `mutter`.
 
 ---
 
-## Instalación Rápida en Un Solo Comando (Cualquier Fedora)
+## Instalación Rápida en Un Solo Comando (Cualquier Fedora|Arch|Debian)
 
 Tanto si estás en **Fedora con cualquier entorno de escritorio** (GNOME, KDE Plasma, Xfce, etc.) como en la terminal de **Fedora Minimal**, puedes instalar todas las dependencias, clonar el repositorio, compilar Malus DE en perfil `Release` y registrar la sesión Wayland en un único comando:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash
 ```
 
 * **En Fedora con escritorio (GDM, SDDM, LightDM, etc.):** El instalador respeta los paquetes de tu sistema (como `tuned-ppd` o `ffmpeg` de RPM Fusion), compila e instala Malus DE y registra automáticamente la sesión **Malus DE** en `/usr/share/wayland-sessions/malus.desktop`. Solo tienes que cerrar sesión (*Log Out*) y elegir **Malus DE** en tu pantalla de login.
@@ -17,14 +17,14 @@ curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/s
 
 ```bash
 # Con arranque automático en TTY1 (~/.bash_profile)
-curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash -s -- --tty-autostart
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash -s -- --tty-autostart
 
 # O con gestor visual ligero greetd + tuigreet
-curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash -s -- --greetd
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash -s -- --greetd
 ```
 
 > [!NOTE]
-> El script [install-fedora-minimal.sh](../scripts/install-fedora-minimal.sh) descarga el código en `~/malus-de` (configurable con `--dir`), ejecuta `cargo build --release --workspace`, despliega los binarios en `/usr/local/bin/` y registra la sesión Wayland para cualquier Display Manager. Si prefieres ejecutar o revisar cada paso manualmente en una instalación limpia, sigue las secciones detalladas a continuación.
+> El script [automate-install.sh](../automate-install.sh) descarga el código en `~/malus-de` (configurable con `--dir`), ejecuta `cargo build --release --workspace`, despliega los binarios en `/usr/local/bin/` y registra la sesión Wayland para cualquier Display Manager. Si prefieres ejecutar o revisar cada paso manualmente en una instalación limpia, sigue las secciones detalladas a continuación.
 
 ---
 
