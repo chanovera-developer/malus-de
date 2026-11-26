@@ -8,6 +8,8 @@ pub mod config;
 pub mod crash;
 #[cfg(feature = "gtk-ui")]
 pub mod folder_icon;
+#[cfg(feature = "gtk-ui")]
+pub mod icon_selection;
 pub mod ipc;
 pub mod logging;
 #[cfg(feature = "gtk-ui")]

@@ -646,40 +646,44 @@ searchentry.branches-search-entry:focus,
 
 .branches-icon-item {
     border-radius: 10px;
-    border: 1.5px solid transparent;
+    border: none;
     outline: none;
-    padding: 5px;
+    padding: 0;
     margin: 0;
     min-width: 72px;
-    transition: background-color 120ms ease;
+    background: transparent;
+    background-color: transparent;
 }
 
 .branches-icon-item:hover {
-    background-color: alpha(@window_fg_color, 0.06);
+    background-color: transparent;
 }
 
 .branches-icon-item:selected,
 .branches-icon-item.selected,
 .branches-icon-item.selected:hover,
 .branches-icon-item:focus {
-    background-color: alpha(@accent_bg_color, 0.14);
-    border: 1.5px solid alpha(@accent_bg_color, 0.55);
+    background: transparent;
+    background-color: transparent;
+    border: none;
     outline: none;
-    border-radius: 10px;
+    box-shadow: none;
     transition: none;
 }
 
 .branches-icon-item.selected .branches-icon-label,
 .branches-icon-item:selected .branches-icon-label {
-    background-color: @accent_bg_color;
+    background: transparent;
+    background-color: transparent;
     color: @accent_fg_color;
-    border-radius: 4px;
-    padding: 1px 4px;
+    border-radius: 0;
+    padding: 0;
 }
 
 .branches-icon-label {
     font-size: 12px;
-    margin-top: 4px;
+    padding: 0;
+    margin-top: 0;
 }
 
 /* Edición inline de nombres de archivos, carpetas y marcadores sin expandir el layout */

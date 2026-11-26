@@ -813,6 +813,10 @@ impl IconView {
                 let d = data_rc.borrow();
                 d.image
                     .set_size_request(metrics.icon_size, metrics.icon_size);
+                malus_de_common::icon_selection::update_icon_slot_size(
+                    &d.widget,
+                    metrics.icon_size,
+                );
                 crate::views::update_item_image_thumbnail(
                     &d.image,
                     &d.item,
@@ -843,6 +847,7 @@ impl IconView {
             let d = data_rc.borrow();
             d.image
                 .set_size_request(metrics.icon_size, metrics.icon_size);
+            malus_de_common::icon_selection::update_icon_slot_size(&d.widget, metrics.icon_size);
             crate::views::update_item_image_thumbnail(
                 &d.image,
                 &d.item,
@@ -1376,7 +1381,6 @@ impl IconView {
             metrics.icon_size,
             Some("branches-item-thumb"),
         );
-        vbox.append(&media_widget);
 
         let label = Label::builder()
             .label(&item.name)
@@ -1385,14 +1389,22 @@ impl IconView {
             .wrap(true)
             .wrap_mode(gtk4::pango::WrapMode::WordChar)
             .lines(2)
+            .justify(gtk4::Justification::Center)
             .halign(Align::Center)
+            .xalign(0.5)
             .css_classes(["branches-icon-label"])
             .build();
-        vbox.append(&label);
 
-        if let Some(tag_dots) = crate::views::create_item_tag_dots(&item.path, tags_map) {
-            vbox.append(&tag_dots);
-        }
+        let tag_dots_opt = crate::views::create_item_tag_dots(&item.path, tags_map);
+        let extra_ref = tag_dots_opt.as_ref().map(|w| w.upcast_ref::<gtk4::Widget>());
+        malus_de_common::icon_selection::populate_icon_with_macos_selection(
+            &vbox,
+            &media_widget,
+            metrics.icon_size,
+            &label,
+            extra_ref,
+            malus_de_common::icon_selection::IconSelectionTheme::WindowCanvas,
+        );
 
         // 1. Doble clic para abrir, segundo clic lento sobre etiqueta para renombrar (estilo Finder)
         // y Clic derecho para menú contextual

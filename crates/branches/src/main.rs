@@ -406,7 +406,8 @@ mod tests {
         assert!(sidebar_hover_block.contains("transform: none;"));
         assert!(sidebar_hover_block.contains("border: none;"));
         assert!(css.contains(".branches-folder-pane.branches-split-mode.branches-pane-active"));
-        assert!(css.contains("border: 1.5px solid alpha(@accent_bg_color, 0.55);"));
+        // La selección de iconos usa squircle Cairo sobre icono + píldora por línea en la etiqueta (sin marco exterior azul)
+        assert!(css.contains(".branches-icon-item.selected .branches-icon-label"));
         assert!(!css.contains("outline: 2px solid alpha(@accent_bg_color, 0.55);"));
     }
 

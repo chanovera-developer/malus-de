@@ -3510,13 +3510,24 @@ fn refresh_desktop_icons(
             let label = Label::builder()
                 .label(cat.title())
                 .wrap(true)
+                .wrap_mode(gtk4::pango::WrapMode::WordChar)
+                .lines(2)
+                .ellipsize(gtk4::pango::EllipsizeMode::Middle)
                 .max_width_chars(14)
                 .justify(gtk4::Justification::Center)
+                .halign(Align::Center)
+                .xalign(0.5)
                 .css_classes(["desktop-icon-label"])
                 .build();
 
-            stack_box.append(&icon_overlay);
-            stack_box.append(&label);
+            malus_de_common::icon_selection::populate_icon_with_macos_selection(
+                &stack_box,
+                &icon_overlay,
+                metrics.icon_size,
+                &label,
+                None,
+                malus_de_common::icon_selection::IconSelectionTheme::DesktopWallpaper,
+            );
 
             let (x, y) = calculate_grid_position(
                 slot_index,
@@ -3989,18 +4000,22 @@ pub fn truncate_desktop_name(name: &str, max_chars: usize) -> String {
 }
 
 pub fn get_icon_label<W: IsA<gtk4::Widget>>(item_box: &W) -> Option<gtk4::Label> {
-    if let Some(box_widget) = item_box.as_ref().downcast_ref::<gtk4::Box>() {
-        let mut child = box_widget.first_child();
+    fn find_recursive(widget: &gtk4::Widget) -> Option<gtk4::Label> {
+        let mut child = widget.first_child();
         while let Some(c) = child {
             if let Some(label) = c.downcast_ref::<gtk4::Label>() {
                 if label.has_css_class("desktop-icon-label") {
                     return Some(label.clone());
                 }
             }
+            if let Some(found) = find_recursive(&c) {
+                return Some(found);
+            }
             child = c.next_sibling();
         }
+        None
     }
-    None
+    find_recursive(item_box.as_ref())
 }
 
 pub fn set_desktop_icon_selected<W: IsA<gtk4::Widget>>(item_box: &W, selected: bool) {
@@ -4022,22 +4037,10 @@ pub fn set_desktop_icon_selected<W: IsA<gtk4::Widget>>(item_box: &W, selected: b
             return;
         }
 
-        let max_chars = if widget.width_request() > 0 {
-            (widget.width_request() * 2 / 9).clamp(20, 36) as usize
-        } else {
-            24
-        };
-
-        if selected {
-            label.set_lines(0);
-            label.set_ellipsize(gtk4::pango::EllipsizeMode::None);
-            label.set_text(full_name_str);
-        } else {
-            let truncated = truncate_desktop_name(full_name_str, max_chars);
-            label.set_lines(2);
-            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-            label.set_text(&truncated);
-        }
+        // Mantener siempre un máximo estricto de 2 líneas con elipsis central única gestionada por Pango
+        label.set_lines(2);
+        label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        label.set_text(full_name_str);
     }
 }
 
@@ -5706,8 +5709,12 @@ fn render_single_icon(
     let label = Label::builder()
         .wrap(true)
         .wrap_mode(gtk4::pango::WrapMode::WordChar)
+        .lines(2)
+        .ellipsize(gtk4::pango::EllipsizeMode::Middle)
         .max_width_chars(14)
         .justify(gtk4::Justification::Center)
+        .halign(Align::Center)
+        .xalign(0.5)
         .css_classes(["desktop-icon-label"])
         .build();
     label.set_widget_name(&display_name);
@@ -5723,21 +5730,28 @@ fn render_single_icon(
         .tooltip_text(path.to_string_lossy())
         .build();
 
-    if is_video {
+    let icon_visual: gtk4::Widget = if is_video {
         icon_image.set_size_request(metrics.icon_size, metrics.icon_size);
         icon_image.set_halign(Align::Center);
         icon_image.set_valign(Align::Center);
-        let video_overlay = malus_de_common::video_thumb::wrap_video_thumbnail_with_play_button(
+        malus_de_common::video_thumb::wrap_video_thumbnail_with_play_button(
             &icon_image,
             &path,
             metrics.icon_size,
             true,
-        );
-        item_box.append(&video_overlay);
+        )
+        .upcast()
     } else {
-        item_box.append(&icon_image);
-    }
-    item_box.append(&label);
+        icon_image.upcast()
+    };
+    malus_de_common::icon_selection::populate_icon_with_macos_selection(
+        &item_box,
+        &icon_visual,
+        metrics.icon_size,
+        &label,
+        None,
+        malus_de_common::icon_selection::IconSelectionTheme::DesktopWallpaper,
+    );
 
     unsafe {
         item_box.set_data("desktop_item_path", path.clone());
