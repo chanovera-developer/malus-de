@@ -1,7 +1,9 @@
 pub mod auto_tiling;
 pub mod branches_menu;
+pub mod cc_dnd;
 pub mod clock;
 pub mod control_center;
+pub mod control_center_editor;
 pub mod global_menu;
 pub mod menubar_extras;
 pub mod power_profile;

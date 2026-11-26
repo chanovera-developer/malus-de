@@ -370,6 +370,7 @@ pub struct MalusState {
     pub auto_tiling_enabled: bool,
     pub dock_cfg: DockConfig,
     pub desktop_dock_cfg: malus_de_common::config::DesktopDockConfig,
+    pub control_center_glass_regions: Vec<malus_de_common::ipc::GlassRegion>,
     pub input_cfg: malus_de_common::config::InputConfig,
     pub input_config_dirty: bool,
     pub show_desktop_hidden_ids: Vec<u64>,
@@ -1817,6 +1818,7 @@ impl MalusState {
             auto_tiling_enabled: false,
             dock_cfg: dock_config,
             desktop_dock_cfg,
+            control_center_glass_regions: Vec::new(),
             input_cfg,
             input_config_dirty: false,
             show_desktop_hidden_ids: Vec::new(),
@@ -2683,6 +2685,10 @@ impl MalusState {
                     );
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadMenuBarConfig);
+                }
+                IpcMessage::SetControlCenterGlassRegions { regions } => {
+                    self.control_center_glass_regions = regions;
+                    self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
                 }
                 IpcMessage::ToggleAutoTiling => {
                     tracing::info!("📥 IPC ToggleAutoTiling recibido — alternando mosaico de ventanas");

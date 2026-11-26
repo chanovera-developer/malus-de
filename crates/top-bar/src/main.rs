@@ -362,6 +362,7 @@ fn build_ui(app: &Application) {
                     title,
                     window_id,
                 } => {
+                    ui::control_center::close_control_center_if_not_editing();
                     active_app_ipc.set(app_id.as_ref().is_some_and(|id| !id.is_empty()));
                     if let Some(ref f) = *sync_slot_ipc.borrow() {
                         f();
@@ -394,6 +395,8 @@ fn build_ui(app: &Application) {
                         adw::ColorScheme::ForceLight
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
+                    ui::control_center::sync_control_center_theme(is_dark);
+                    ui::status_tray::refresh_tray_visibility();
                     ui::system_menu::refresh_system_menu_logo();
                 }
                 malus_de_common::ipc::IpcMessage::AccentColorChanged { index } => {
@@ -406,6 +409,7 @@ fn build_ui(app: &Application) {
                         opacity
                     );
                     apply_topbar_liquid_glass_opacity(opacity);
+                    ui::control_center::redraw_control_center_surfaces();
                     win_ipc.queue_draw();
                 }
                 malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig => {
@@ -419,6 +423,7 @@ fn build_ui(app: &Application) {
                         malus_de_common::config::load_liquid_glass_opacity(),
                     );
                     ui::status_tray::refresh_tray_visibility();
+                    ui::control_center::refresh_control_center_layout();
                     ui::power_profile::refresh_power_profile_visibility();
                     ui::auto_tiling::refresh_auto_tiling_visibility();
                     ui::clock::refresh_clock_now();
@@ -430,6 +435,7 @@ fn build_ui(app: &Application) {
                 }
                 malus_de_common::ipc::IpcMessage::AutoTilingChanged { enabled } => {
                     ui::auto_tiling::set_auto_tiling_visual(enabled);
+                    ui::control_center::set_auto_tiling_cc_state(enabled);
                     win_ipc.queue_draw();
                 }
                 malus_de_common::ipc::IpcMessage::KeyboardLayoutChanged { .. }

@@ -2217,11 +2217,13 @@ pub fn run_winit() -> Result<()> {
                                 Rectangle<i32, Physical>,
                                 f32,
                                 bool,
-                                bool,
+                                u8,
                             )> = Vec::new();
                             for (_, rect) in &spotlight_backdrop_elements {
-                                layer_blur_items.push((*rect, 26.0, false, false));
+                                layer_blur_items.push((*rect, 26.0, false, 0));
                             }
+                            let mut cc_refract_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
+                                Vec::new();
                             for surface in layer_map.layers() {
                                 if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
                                     if has_fullscreen_window && surface.layer() == Layer::Top {
@@ -2234,11 +2236,33 @@ pub fn run_winit() -> Result<()> {
                                     if ns == "malus-top-bar" {
                                         continue;
                                     }
+                                    if ns == "malus-control-center" {
+                                        if let Some(geo) = layer_map.layer_geometry(surface) {
+                                            let base: Rectangle<i32, Physical> =
+                                                geo.to_physical_precise_round(1.0);
+                                            for r in &state.control_center_glass_regions {
+                                                if r.width < 4 || r.height < 4 {
+                                                    continue;
+                                                }
+                                                let rect = Rectangle::new(
+                                                    Point::from((base.loc.x + r.x, base.loc.y + r.y)),
+                                                    smithay::utils::Size::from((r.width, r.height)),
+                                                );
+                                                let eff_r = r
+                                                    .radius
+                                                    .min(r.width as f32 * 0.5)
+                                                    .min(r.height as f32 * 0.5);
+                                                cc_refract_items.push((rect, eff_r, r.is_capsule));
+                                            }
+                                        }
+                                        continue;
+                                    }
                                     if let Some(geo) = layer_map.layer_geometry(surface) {
                                         let dock_radius = state.dock_cfg.dock_corner_radius();
                                         let radius = match ns.as_ref() {
                                             "malus-dock" => dock_radius,
                                             "malus-app-switcher" => 32.0,
+                                            "malus-control-center-editor" => 34.0,
                                             "malus-lock" => 0.0,
                                             "malus-spotlight-controls"
                                             | "malus-spotlight-input"
@@ -2257,8 +2281,10 @@ pub fn run_winit() -> Result<()> {
                                                     | "malus-spotlight-apps"
                                                     | "malus-spotlight-files"
                                             );
-                                            let is_notification =
-                                                ns == "malus-notifications";
+                                            let is_notification = ns == "malus-notifications";
+                                            let is_cc_editor =
+                                                ns == "malus-control-center-editor";
+                                            let with_menu_shadow = is_notification || is_cc_editor;
                                             let phys_rect = if ns == "malus-dock" {
                                                 let root_id =
                                                 smithay::backend::renderer::element::Id::from_wayland_resource(
@@ -2292,18 +2318,25 @@ pub fn run_winit() -> Result<()> {
                                                 }
                                             };
                                             if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
-                                                let effective_radius = if is_notification {
+                                                let effective_radius = if with_menu_shadow {
                                                     radius
                                                         .min(phys_rect.size.w as f32 * 0.5)
                                                         .min(phys_rect.size.h as f32 * 0.5)
                                                 } else {
                                                     radius
                                                 };
+                                                let shadow_kind: u8 = if is_cc_editor {
+                                                    2
+                                                } else if is_notification {
+                                                    1
+                                                } else {
+                                                    0
+                                                };
                                                 layer_blur_items.push((
                                                     phys_rect,
                                                     effective_radius,
                                                     is_spotlight_comp,
-                                                    is_notification,
+                                                    shadow_kind,
                                                 ));
                                             }
                                         }
@@ -2311,12 +2344,18 @@ pub fn run_winit() -> Result<()> {
                                 }
                             }
 
-                            if !layer_blur_items.is_empty() {
+                            if !layer_blur_items.is_empty() || !cc_refract_items.is_empty() {
                                 let mut min_x = i32::MAX;
                                 let mut min_y = i32::MAX;
                                 let mut max_x = i32::MIN;
                                 let mut max_y = i32::MIN;
                                 for (rect, _, _, _) in &layer_blur_items {
+                                    min_x = min_x.min(rect.loc.x);
+                                    min_y = min_y.min(rect.loc.y);
+                                    max_x = max_x.max(rect.loc.x + rect.size.w);
+                                    max_y = max_y.max(rect.loc.y + rect.size.h);
+                                }
+                                for (rect, _, _) in &cc_refract_items {
                                     min_x = min_x.min(rect.loc.x);
                                     min_y = min_y.min(rect.loc.y);
                                     max_x = max_x.max(rect.loc.x + rect.size.w);
@@ -2341,10 +2380,30 @@ pub fn run_winit() -> Result<()> {
                                         screen_size,
                                         capture_region,
                                     );
-                                    for (phys_rect, radius, is_round, with_osd_shadow) in
+                                    for (phys_rect, radius, is_round, shadow_kind) in
                                         layer_blur_items
                                     {
-                                        if with_osd_shadow {
+                                        if shadow_kind == 2 {
+                                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                                shadow.render_shadow_alpha(
+                                                    gl,
+                                                    &projection,
+                                                    phys_rect,
+                                                    radius,
+                                                    true,
+                                                    1.0,
+                                                    1.0,
+                                                );
+                                                shadow.render_menu_shadow_alpha(
+                                                    gl,
+                                                    &projection,
+                                                    phys_rect,
+                                                    radius,
+                                                    1.0,
+                                                    0.9,
+                                                );
+                                            }
+                                        } else if shadow_kind == 1 {
                                             if let Some(shadow) = shadow_pipeline.as_ref() {
                                                 shadow.render_menu_shadow_alpha(
                                                     gl,
@@ -2357,6 +2416,35 @@ pub fn run_winit() -> Result<()> {
                                             }
                                         }
                                         if is_round {
+                                            blur.render_captured_blur_round(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        } else {
+                                            blur.render_captured_blur(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        }
+                                    }
+                                    for (phys_rect, radius, is_capsule) in cc_refract_items {
+                                        if let Some(shadow) = shadow_pipeline.as_ref() {
+                                            shadow.render_menu_shadow_alpha(
+                                                gl,
+                                                &projection,
+                                                phys_rect,
+                                                radius,
+                                                1.0,
+                                                0.85,
+                                            );
+                                        }
+                                        if is_capsule {
                                             blur.render_captured_blur_round(
                                                 gl,
                                                 &projection,

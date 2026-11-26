@@ -73,5 +73,16 @@ pub fn create_auto_tiling_widget() -> Button {
         }
     });
 
+    crate::ui::cc_dnd::attach_drag_source(
+        &btn,
+        crate::ui::cc_dnd::DragPayload::FromTray(
+            malus_de_common::config::ControlWidgetKind::StageManager,
+        ),
+        Some(Rc::new(|| {
+            crate::ui::control_center::open_control_center_for_drag();
+        })),
+        None,
+    );
+
     btn
 }

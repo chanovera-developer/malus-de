@@ -2488,6 +2488,10 @@ pub struct MenuBarConfig {
     pub weather: bool,
     pub power_profile: bool,
     pub window_tiling: bool,
+    #[serde(default)]
+    pub dark_mode: bool,
+    #[serde(default)]
+    pub desktop_finder: bool,
 }
 
 impl Default for MenuBarConfig {
@@ -2530,6 +2534,8 @@ impl Default for MenuBarConfig {
             weather: false,
             power_profile: true,
             window_tiling: true,
+            dark_mode: false,
+            desktop_finder: false,
         }
     }
 }
@@ -2587,6 +2593,531 @@ impl MenuBarConfig {
             time_part
         } else {
             format!("{}  {time_part}", date_parts.join(" "))
+        }
+    }
+
+    pub fn is_widget_in_tray(&self, kind: ControlWidgetKind) -> bool {
+        match kind {
+            ControlWidgetKind::Wifi => self.wifi,
+            ControlWidgetKind::Bluetooth => self.bluetooth,
+            ControlWidgetKind::AirDrop => self.airdrop,
+            ControlWidgetKind::NowPlaying => self.now_playing && self.now_playing_mode == 0,
+            ControlWidgetKind::StageManager => self.window_tiling,
+            ControlWidgetKind::ScreenMirroring => {
+                self.screen_mirroring && self.screen_mirroring_mode == 0
+            }
+            ControlWidgetKind::DarkMode => self.dark_mode,
+            ControlWidgetKind::DesktopFinder => self.desktop_finder,
+            ControlWidgetKind::Focus => self.focus && self.focus_mode == 0,
+            ControlWidgetKind::Display => self.display && self.display_mode == 0,
+            ControlWidgetKind::Sound => self.sound,
+        }
+    }
+
+    pub fn set_widget_in_tray(&mut self, kind: ControlWidgetKind, visible: bool) {
+        match kind {
+            ControlWidgetKind::Wifi => self.wifi = visible,
+            ControlWidgetKind::Bluetooth => self.bluetooth = visible,
+            ControlWidgetKind::AirDrop => self.airdrop = visible,
+            ControlWidgetKind::NowPlaying => {
+                self.now_playing = visible;
+                if visible {
+                    self.now_playing_mode = 0;
+                }
+            }
+            ControlWidgetKind::StageManager => self.window_tiling = visible,
+            ControlWidgetKind::ScreenMirroring => {
+                self.screen_mirroring = visible;
+                if visible {
+                    self.screen_mirroring_mode = 0;
+                }
+            }
+            ControlWidgetKind::DarkMode => self.dark_mode = visible,
+            ControlWidgetKind::DesktopFinder => self.desktop_finder = visible,
+            ControlWidgetKind::Focus => {
+                self.focus = visible;
+                if visible {
+                    self.focus_mode = 0;
+                }
+            }
+            ControlWidgetKind::Display => {
+                self.display = visible;
+                if visible {
+                    self.display_mode = 0;
+                }
+            }
+            ControlWidgetKind::Sound => {
+                self.sound = visible;
+                if visible {
+                    self.sound_mode = 0;
+                }
+            }
+        }
+    }
+}
+
+/// Controles disponibles en el Centro de Control estilo macOS Tahoe (extensible para futuros widgets).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlWidgetKind {
+    Wifi,
+    Bluetooth,
+    AirDrop,
+    NowPlaying,
+    StageManager,
+    ScreenMirroring,
+    DarkMode,
+    DesktopFinder,
+    Focus,
+    Display,
+    Sound,
+}
+
+impl ControlWidgetKind {
+    pub const ALL: &'static [ControlWidgetKind] = &[
+        Self::Wifi,
+        Self::Bluetooth,
+        Self::AirDrop,
+        Self::NowPlaying,
+        Self::StageManager,
+        Self::ScreenMirroring,
+        Self::DarkMode,
+        Self::DesktopFinder,
+        Self::Focus,
+        Self::Display,
+        Self::Sound,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Wifi => "wifi",
+            Self::Bluetooth => "bluetooth",
+            Self::AirDrop => "air_drop",
+            Self::NowPlaying => "now_playing",
+            Self::StageManager => "stage_manager",
+            Self::ScreenMirroring => "screen_mirroring",
+            Self::DarkMode => "dark_mode",
+            Self::DesktopFinder => "desktop_finder",
+            Self::Focus => "focus",
+            Self::Display => "display",
+            Self::Sound => "sound",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id.trim() {
+            "wifi" => Some(Self::Wifi),
+            "bluetooth" => Some(Self::Bluetooth),
+            "air_drop" | "airdrop" => Some(Self::AirDrop),
+            "now_playing" => Some(Self::NowPlaying),
+            "stage_manager" | "window_tiling" => Some(Self::StageManager),
+            "screen_mirroring" => Some(Self::ScreenMirroring),
+            "dark_mode" => Some(Self::DarkMode),
+            "desktop_finder" => Some(Self::DesktopFinder),
+            "focus" => Some(Self::Focus),
+            "display" => Some(Self::Display),
+            "sound" => Some(Self::Sound),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(self, es: bool) -> &'static str {
+        if es {
+            match self {
+                Self::Wifi => "Wi-Fi",
+                Self::Bluetooth => "Bluetooth",
+                Self::AirDrop => "AirDrop",
+                Self::NowPlaying => "Ahora suena",
+                Self::StageManager => "Organizador visual",
+                Self::ScreenMirroring => "Duplicar pantalla",
+                Self::DarkMode => "Modo oscuro",
+                Self::DesktopFinder => "Escritorio y Finder",
+                Self::Focus => "No molestar",
+                Self::Display => "Pantalla",
+                Self::Sound => "Sonido",
+            }
+        } else {
+            match self {
+                Self::Wifi => "Wi-Fi",
+                Self::Bluetooth => "Bluetooth",
+                Self::AirDrop => "AirDrop",
+                Self::NowPlaying => "Now Playing",
+                Self::StageManager => "Stage Manager",
+                Self::ScreenMirroring => "Screen Mirroring",
+                Self::DarkMode => "Dark Mode",
+                Self::DesktopFinder => "Desktop & Finder",
+                Self::Focus => "Focus",
+                Self::Display => "Display",
+                Self::Sound => "Sound",
+            }
+        }
+    }
+
+    pub fn category_id(self) -> &'static str {
+        match self {
+            Self::Wifi | Self::Bluetooth | Self::AirDrop => "connectivity",
+            Self::NowPlaying => "now_playing",
+            Self::StageManager | Self::DesktopFinder => "desktop",
+            Self::ScreenMirroring | Self::Display | Self::DarkMode => "display",
+            Self::Focus => "focus",
+            Self::Sound => "sound",
+        }
+    }
+
+    pub fn icon_name(self) -> &'static str {
+        match self {
+            Self::Wifi => "network-wireless-symbolic",
+            Self::Bluetooth => "bluetooth-active-symbolic",
+            Self::AirDrop => "network-wireless-hotspot-symbolic",
+            Self::NowPlaying => "audio-x-generic-symbolic",
+            Self::StageManager => "view-paged-symbolic",
+            Self::ScreenMirroring => "video-display-symbolic",
+            Self::DarkMode => "dark-mode-symbolic",
+            Self::DesktopFinder => "user-desktop-symbolic",
+            Self::Focus => "weather-clear-night-symbolic",
+            Self::Display => "display-brightness-symbolic",
+            Self::Sound => "audio-volume-high-symbolic",
+        }
+    }
+
+    pub fn default_span(self) -> (u8, u8) {
+        match self {
+            Self::Wifi | Self::Bluetooth | Self::AirDrop | Self::Focus => (2, 1),
+            Self::NowPlaying => (2, 2),
+            Self::StageManager | Self::ScreenMirroring | Self::DarkMode | Self::DesktopFinder => {
+                (1, 1)
+            }
+            Self::Display | Self::Sound => (4, 1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ControlWidgetEntry {
+    pub kind: ControlWidgetKind,
+    pub col: u8,
+    pub row: u8,
+    pub col_span: u8,
+    pub row_span: u8,
+}
+
+/// Disposición persistente de la cuadrícula de 4 columnas del Centro de Control (`~/.config/malus-de/control-center.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ControlCenterConfig {
+    pub widgets: Vec<ControlWidgetEntry>,
+}
+
+impl Default for ControlCenterConfig {
+    fn default() -> Self {
+        Self {
+            widgets: vec![
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::Wifi,
+                    col: 0,
+                    row: 0,
+                    col_span: 2,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::NowPlaying,
+                    col: 2,
+                    row: 0,
+                    col_span: 2,
+                    row_span: 2,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::Bluetooth,
+                    col: 0,
+                    row: 1,
+                    col_span: 2,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::AirDrop,
+                    col: 0,
+                    row: 2,
+                    col_span: 2,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::StageManager,
+                    col: 2,
+                    row: 2,
+                    col_span: 1,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::ScreenMirroring,
+                    col: 3,
+                    row: 2,
+                    col_span: 1,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::DarkMode,
+                    col: 0,
+                    row: 3,
+                    col_span: 1,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::DesktopFinder,
+                    col: 1,
+                    row: 3,
+                    col_span: 1,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::Focus,
+                    col: 2,
+                    row: 3,
+                    col_span: 2,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::Display,
+                    col: 0,
+                    row: 4,
+                    col_span: 4,
+                    row_span: 1,
+                },
+                ControlWidgetEntry {
+                    kind: ControlWidgetKind::Sound,
+                    col: 0,
+                    row: 5,
+                    col_span: 4,
+                    row_span: 1,
+                },
+            ],
+        }
+    }
+}
+
+impl ControlCenterConfig {
+    pub const GRID_COLS: u8 = 4;
+
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/control-center.toml")
+    }
+
+    pub fn load() -> Self {
+        let parsed = std::fs::read_to_string(Self::config_path())
+            .ok()
+            .and_then(|c| toml::from_str::<ControlCenterConfig>(&c).ok());
+        match parsed {
+            Some(cfg) if !cfg.widgets.is_empty() => cfg,
+            _ => Self::default(),
+        }
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Disposición de controles del Centro de Control de Malus DE\n\n";
+        std::fs::write(path, format!("{header}{toml_str}"))
+    }
+
+    pub fn contains(&self, kind: ControlWidgetKind) -> bool {
+        self.widgets.iter().any(|w| w.kind == kind)
+    }
+
+    fn slot_free(&self, col: u8, row: u8, col_span: u8, row_span: u8, ignore: Option<ControlWidgetKind>) -> bool {
+        if col + col_span > Self::GRID_COLS {
+            return false;
+        }
+        for w in &self.widgets {
+            if Some(w.kind) == ignore {
+                continue;
+            }
+            let x_overlap = col < w.col + w.col_span && col + col_span > w.col;
+            let y_overlap = row < w.row + w.row_span && row + row_span > w.row;
+            if x_overlap && y_overlap {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Añade un widget al primer hueco libre de la cuadrícula de 4 columnas.
+    pub fn add_widget(&mut self, kind: ControlWidgetKind) -> bool {
+        if self.contains(kind) {
+            return false;
+        }
+        let (col_span, row_span) = kind.default_span();
+        for row in 0..32u8 {
+            for col in 0..=Self::GRID_COLS.saturating_sub(col_span) {
+                if self.slot_free(col, row, col_span, row_span, None) {
+                    self.widgets.push(ControlWidgetEntry {
+                        kind,
+                        col,
+                        row,
+                        col_span,
+                        row_span,
+                    });
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn remove_widget(&mut self, kind: ControlWidgetKind) -> bool {
+        let before = self.widgets.len();
+        self.widgets.retain(|w| w.kind != kind);
+        let changed = self.widgets.len() != before;
+        if changed {
+            self.repack_upward();
+        }
+        changed
+    }
+
+    /// Excluye del Centro de Control cualquier widget que ya esté fijado en la barra superior
+    /// y recompacta hacia arriba para evitar huecos vacíos.
+    pub fn sync_with_menubar(&mut self, mb: &MenuBarConfig) -> bool {
+        let before = self.widgets.len();
+        self.widgets.retain(|w| !mb.is_widget_in_tray(w.kind));
+        let changed = self.widgets.len() != before;
+        if changed {
+            self.repack_upward();
+        }
+        changed
+    }
+
+    /// Compacta widgets hacia las filas más altas disponibles sin provocar solapamientos.
+    pub fn repack_upward(&mut self) {
+        self.compact_empty_rows();
+        self.widgets.sort_by_key(|w| (w.row, w.col));
+        let mut packed: Vec<ControlWidgetEntry> = Vec::with_capacity(self.widgets.len());
+        for mut w in self.widgets.drain(..) {
+            'search: for r in 0..=w.row {
+                // Primero intentar mantener su misma columna si cabe arriba
+                if Self::slot_free_in(&packed, w.col, r, w.col_span, w.row_span) {
+                    w.row = r;
+                    break 'search;
+                }
+                // Si hay una fila estrictamente superior con espacio en otra columna, aprovecharla
+                if r < w.row {
+                    for c in 0..=Self::GRID_COLS.saturating_sub(w.col_span) {
+                        if Self::slot_free_in(&packed, c, r, w.col_span, w.row_span) {
+                            w.col = c;
+                            w.row = r;
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            packed.push(w);
+        }
+        self.widgets = packed;
+        self.compact_empty_rows();
+    }
+
+    fn slot_free_in(
+        items: &[ControlWidgetEntry],
+        col: u8,
+        row: u8,
+        col_span: u8,
+        row_span: u8,
+    ) -> bool {
+        if col + col_span > Self::GRID_COLS {
+            return false;
+        }
+        for w in items {
+            let x_overlap = col < w.col + w.col_span && col + col_span > w.col;
+            let y_overlap = row < w.row + w.row_span && row + row_span > w.row;
+            if x_overlap && y_overlap {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Reubica o intercambia un widget hacia la posición `(target_col, target_row)` (o lo añade si no estaba).
+    pub fn place_widget_at(&mut self, kind: ControlWidgetKind, target_col: u8, target_row: u8) -> bool {
+        let (col_span, row_span) = kind.default_span();
+        let clamped_col = target_col.min(Self::GRID_COLS.saturating_sub(col_span));
+
+        // Si el widget ya existía y la celda destino contiene otro del mismo tamaño, intercambiar posiciones
+        if let Some(src_idx) = self.widgets.iter().position(|w| w.kind == kind) {
+            let src = self.widgets[src_idx];
+            if let Some(dst_idx) = self.widgets.iter().position(|w| {
+                w.kind != kind
+                    && target_col >= w.col
+                    && target_col < w.col + w.col_span
+                    && target_row >= w.row
+                    && target_row < w.row + w.row_span
+            }) {
+                let dst = self.widgets[dst_idx];
+                if src.col_span == dst.col_span && src.row_span == dst.row_span {
+                    self.widgets[src_idx].col = dst.col;
+                    self.widgets[src_idx].row = dst.row;
+                    self.widgets[dst_idx].col = src.col;
+                    self.widgets[dst_idx].row = src.row;
+                    return true;
+                }
+            }
+        }
+
+        if self.slot_free(clamped_col, target_row, col_span, row_span, Some(kind)) {
+            if let Some(existing) = self.widgets.iter_mut().find(|w| w.kind == kind) {
+                existing.col = clamped_col;
+                existing.row = target_row;
+            } else {
+                self.widgets.push(ControlWidgetEntry {
+                    kind,
+                    col: clamped_col,
+                    row: target_row,
+                    col_span,
+                    row_span,
+                });
+            }
+            self.compact_empty_rows();
+            return true;
+        }
+
+        // Si está ocupado por otro de distinto tamaño, añadir al primer hueco libre si aún no existía
+        if !self.contains(kind) {
+            return self.add_widget(kind);
+        }
+        false
+    }
+
+    pub fn max_row_end(&self) -> u8 {
+        self.widgets
+            .iter()
+            .map(|w| w.row + w.row_span)
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn compact_empty_rows(&mut self) {
+        loop {
+            let max_r = self.max_row_end();
+            let mut empty_row = None;
+            for r in 0..max_r {
+                let occupied = self
+                    .widgets
+                    .iter()
+                    .any(|w| r >= w.row && r < w.row + w.row_span);
+                if !occupied {
+                    empty_row = Some(r);
+                    break;
+                }
+            }
+            let Some(er) = empty_row else {
+                break;
+            };
+            for w in &mut self.widgets {
+                if w.row > er {
+                    w.row -= 1;
+                }
+            }
         }
     }
 }
@@ -7556,5 +8087,74 @@ apps = []
         assert_eq!(PrintersConfig::load_in(&dir), cfg);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn control_center_config_default_layout_and_dnd_operations_work() {
+        let mut cfg = ControlCenterConfig::default();
+        assert_eq!(cfg.widgets.len(), ControlWidgetKind::ALL.len());
+        assert!(cfg.contains(ControlWidgetKind::Wifi));
+        assert!(cfg.contains(ControlWidgetKind::Sound));
+        assert_eq!(cfg.max_row_end(), 6);
+
+        // Quitar y volver a añadir un widget
+        assert!(cfg.remove_widget(ControlWidgetKind::DarkMode));
+        assert!(!cfg.contains(ControlWidgetKind::DarkMode));
+        assert!(!cfg.remove_widget(ControlWidgetKind::DarkMode));
+        assert!(cfg.add_widget(ControlWidgetKind::DarkMode));
+        assert!(cfg.contains(ControlWidgetKind::DarkMode));
+
+        // Colocar un widget sobre otro intercambia / reposiciona limpiamente
+        cfg.place_widget_at(ControlWidgetKind::DarkMode, 2, 2);
+        let dark_entry = cfg
+            .widgets
+            .iter()
+            .find(|w| w.kind == ControlWidgetKind::DarkMode)
+            .expect("DarkMode presente");
+        assert_eq!((dark_entry.col, dark_entry.row), (2, 2));
+
+        // Roundtrip TOML
+        let raw = toml::to_string(&cfg).expect("serializar ControlCenterConfig");
+        let parsed: ControlCenterConfig =
+            toml::from_str(&raw).expect("deserializar ControlCenterConfig");
+        assert_eq!(parsed, cfg);
+
+        // Toggle bidireccional en MenuBarConfig para los 11 controles
+        let mut mb = MenuBarConfig::default();
+        for &kind in ControlWidgetKind::ALL {
+            mb.set_widget_in_tray(kind, true);
+            assert!(mb.is_widget_in_tray(kind), "{kind:?} debe quedar en tray");
+            mb.set_widget_in_tray(kind, false);
+            assert!(
+                !mb.is_widget_in_tray(kind),
+                "{kind:?} debe retirarse del tray"
+            );
+        }
+
+        // Sincronización con la top-bar: los iconos presentes en top-bar (Bluetooth, Wi-Fi, Sonido)
+        // se excluyen del Centro de Control y los restantes se recompactan sin solapamientos
+        let mut mb_tray = MenuBarConfig::default();
+        mb_tray.wifi = true;
+        mb_tray.bluetooth = true;
+        mb_tray.sound = true;
+        mb_tray.window_tiling = false;
+        let mut cc_synced = ControlCenterConfig::default();
+        assert!(cc_synced.sync_with_menubar(&mb_tray));
+        assert!(!cc_synced.contains(ControlWidgetKind::Wifi));
+        assert!(!cc_synced.contains(ControlWidgetKind::Bluetooth));
+        assert!(!cc_synced.contains(ControlWidgetKind::Sound));
+        assert!(cc_synced.contains(ControlWidgetKind::AirDrop));
+        assert!(cc_synced.contains(ControlWidgetKind::NowPlaying));
+        assert!(cc_synced.contains(ControlWidgetKind::Display));
+        // Sin solapamientos tras recompactar
+        for i in 0..cc_synced.widgets.len() {
+            for j in (i + 1)..cc_synced.widgets.len() {
+                let a = cc_synced.widgets[i];
+                let b = cc_synced.widgets[j];
+                let x_ov = a.col < b.col + b.col_span && a.col + a.col_span > b.col;
+                let y_ov = a.row < b.row + b.row_span && a.row + a.row_span > b.row;
+                assert!(!(x_ov && y_ov), "Solapamiento entre {a:?} y {b:?}");
+            }
+        }
     }
 }

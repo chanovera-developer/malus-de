@@ -25,6 +25,17 @@ pub struct MinimizedWindowInfo {
     pub is_animating: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct GlassRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub radius: f32,
+    #[serde(default)]
+    pub is_capsule: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSwitcherItem {
     pub window_id: u64,
@@ -218,6 +229,10 @@ pub enum IpcMessage {
         layout: String,
         #[serde(default)]
         variant: String,
+    },
+    /// Regiones individuales de cristal líquido con refracción GPU para el Centro de Control flotante
+    SetControlCenterGlassRegions {
+        regions: Vec<GlassRegion>,
     },
 }
 
@@ -790,5 +805,41 @@ mod tests {
         assert!(res.is_err());
         assert!(tmp.exists());
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_control_center_glass_regions_ipc_round_trip() {
+        let msg = IpcMessage::SetControlCenterGlassRegions {
+            regions: vec![
+                GlassRegion {
+                    x: 8,
+                    y: 8,
+                    width: 150,
+                    height: 70,
+                    radius: 35.0,
+                    is_capsule: true,
+                },
+                GlassRegion {
+                    x: 168,
+                    y: 8,
+                    width: 150,
+                    height: 150,
+                    radius: 26.0,
+                    is_capsule: false,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&msg).expect("serializar SetControlCenterGlassRegions");
+        let parsed: IpcMessage =
+            serde_json::from_str(&json).expect("deserializar SetControlCenterGlassRegions");
+        match parsed {
+            IpcMessage::SetControlCenterGlassRegions { regions } => {
+                assert_eq!(regions.len(), 2);
+                assert!(regions[0].is_capsule);
+                assert!(!regions[1].is_capsule);
+                assert_eq!((regions[1].width, regions[1].height), (150, 150));
+            }
+            other => panic!("mensaje inesperado: {other:?}"),
+        }
     }
 }

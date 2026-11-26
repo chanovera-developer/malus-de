@@ -1,10 +1,12 @@
+use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Button, Image, Label, MenuButton, Orientation, PolicyType, Popover,
-    Scale, ScrolledWindow, Separator,
+    Align, Box as GtkBox, Button, DropTarget, GestureClick, Image, Label, MenuButton, Orientation,
+    PolicyType, Popover, Scale, ScrolledWindow, Separator,
 };
+use malus_de_common::config::ControlWidgetKind;
 use malus_de_common::mac_switch::MacSwitch as Switch;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::rc::Rc;
 use tracing::info;
@@ -12,6 +14,7 @@ use tracing::info;
 use crate::services::audio::AudioService;
 use crate::services::bluetooth::BluetoothService;
 use crate::services::network::{NetworkService, WifiApInfo};
+use crate::ui::cc_dnd::{attach_drag_source, pin_widget_to_tray, DragPayload};
 
 thread_local! {
     static TRAY_VISIBILITY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
@@ -20,6 +23,27 @@ thread_local! {
     static KEYBOARD_LABEL_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
     static SYSTEM_DBUS_CONN: RefCell<Option<gtk4::gio::DBusConnection>> = const { RefCell::new(None) };
     static SYSTEM_DBUS_SUBS: RefCell<Vec<gtk4::gio::SignalSubscriptionId>> = const { RefCell::new(Vec::new()) };
+    static TRAY_DROP_SLOT_UPDATE: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    static TRAY_EDIT_MODE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    static TRAY_DRAG_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+pub fn set_tray_edit_mode(active: bool) {
+    TRAY_EDIT_MODE_ACTIVE.with(|c| c.set(active));
+    TRAY_DROP_SLOT_UPDATE.with(|cell| {
+        if let Some(ref f) = *cell.borrow() {
+            f();
+        }
+    });
+}
+
+pub fn set_tray_drag_highlight(active: bool) {
+    TRAY_DRAG_ACTIVE.with(|c| c.set(active));
+    TRAY_DROP_SLOT_UPDATE.with(|cell| {
+        if let Some(ref f) = *cell.borrow() {
+            f();
+        }
+    });
 }
 
 fn system_dbus_connection() -> Option<gtk4::gio::DBusConnection> {
@@ -82,24 +106,52 @@ pub fn create_status_tray_widget() -> GtkBox {
         .spacing(4)
         .build();
 
+    let open_cc_on_drag: Rc<dyn Fn()> = Rc::new(|| {
+        super::control_center::open_control_center_for_drag();
+    });
+
     // 0. Indicador y selector rápido de Teclado (LAT / ES / US)
     let kb_widget = create_keyboard_tray_button();
     tray.append(&kb_widget);
 
     // 1. Malus Link / AirDrop Menu Extra
     let link_widget = create_link_tray_button();
+    attach_drag_source(
+        &link_widget,
+        DragPayload::FromTray(ControlWidgetKind::AirDrop),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
     tray.append(&link_widget);
 
     // 2. Bluetooth Menu Extra (Popover con dispositivos y switch)
     let bt_widget = create_bluetooth_tray_button();
+    attach_drag_source(
+        &bt_widget,
+        DragPayload::FromTray(ControlWidgetKind::Bluetooth),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
     tray.append(&bt_widget);
 
     // 3. Wi-Fi / Red Menu Extra (Popover con redes y switch)
     let wifi_widget = create_wifi_tray_button();
+    attach_drag_source(
+        &wifi_widget,
+        DragPayload::FromTray(ControlWidgetKind::Wifi),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
     tray.append(&wifi_widget);
 
     // 4. Sonido / Volumen Menu Extra (Popover con slider y salida de audio)
     let vol_widget = create_volume_tray_button();
+    attach_drag_source(
+        &vol_widget,
+        DragPayload::FromTray(ControlWidgetKind::Sound),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
     tray.append(&vol_widget);
 
     // 5. Spotlight Search (Lupa macOS)
@@ -108,7 +160,127 @@ pub fn create_status_tray_widget() -> GtkBox {
 
     // 6. Módulos adicionales configurables desde Barra de menús (Batería, Enfoque, Ahora suena, Pantalla, Usuario, Clima, Temporizador...)
     let extras = super::menubar_extras::create_menubar_extra_widgets();
+    attach_drag_source(
+        &extras.focus,
+        DragPayload::FromTray(ControlWidgetKind::Focus),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
+    attach_drag_source(
+        &extras.screen_mirroring,
+        DragPayload::FromTray(ControlWidgetKind::ScreenMirroring),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
+    attach_drag_source(
+        &extras.display,
+        DragPayload::FromTray(ControlWidgetKind::Display),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
+    attach_drag_source(
+        &extras.now_playing,
+        DragPayload::FromTray(ControlWidgetKind::NowPlaying),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
     extras.append_to(&tray);
+
+    // 6b. Controles rápidos fijables desde el Centro de Control (Modo oscuro y Escritorio y Finder)
+    let (dark_mode_widget, refresh_dark_mode_tray) = create_dark_mode_tray_button();
+    attach_drag_source(
+        &dark_mode_widget,
+        DragPayload::FromTray(ControlWidgetKind::DarkMode),
+        Some(open_cc_on_drag.clone()),
+        None,
+    );
+    tray.append(&dark_mode_widget);
+
+    let desktop_finder_widget = create_desktop_finder_tray_button();
+    attach_drag_source(
+        &desktop_finder_widget,
+        DragPayload::FromTray(ControlWidgetKind::DesktopFinder),
+        Some(open_cc_on_drag),
+        None,
+    );
+    tray.append(&desktop_finder_widget);
+
+    // 6c. Ranura visual compacta [+] de destino en modo edición o mientras se arrastra un control al tray
+    let drop_plus_slot = GtkBox::builder()
+        .css_classes(["cc-tray-drop-slot"])
+        .width_request(22)
+        .height_request(22)
+        .valign(Align::Center)
+        .halign(Align::Center)
+        .hexpand(false)
+        .vexpand(false)
+        .visible(false)
+        .tooltip_text("Suelta aquí un control para fijarlo en la barra de menús")
+        .build();
+    let plus_ico = Image::builder()
+        .icon_name("list-add-symbolic")
+        .pixel_size(12)
+        .css_classes(["cc-tray-drop-slot-icon"])
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    drop_plus_slot.append(&plus_ico);
+    tray.append(&drop_plus_slot);
+
+    {
+        let slot_c = drop_plus_slot.clone();
+        let update_slot: Rc<dyn Fn()> = Rc::new(move || {
+            let show = TRAY_EDIT_MODE_ACTIVE.with(|c| c.get())
+                || TRAY_DRAG_ACTIVE.with(|c| c.get());
+            slot_c.set_visible(show);
+        });
+        TRAY_DROP_SLOT_UPDATE.with(|cell| {
+            *cell.borrow_mut() = Some(update_slot);
+        });
+    }
+
+    // DropTarget sobre la bandeja del sistema (acepta controles arrastrados desde el Centro de Control o Editar controles)
+    let attach_tray_drop = |target_widget: &GtkBox, visual_slot: &GtkBox| {
+        let drop_target = DropTarget::new(
+            glib::Type::STRING,
+            gdk::DragAction::COPY | gdk::DragAction::MOVE,
+        );
+        let slot_enter = visual_slot.clone();
+        drop_target.connect_enter(move |_, _, _| {
+            slot_enter.set_visible(true);
+            slot_enter.add_css_class("cc-tray-drop-slot-hover");
+            gdk::DragAction::COPY
+        });
+        let slot_leave = visual_slot.clone();
+        drop_target.connect_leave(move |_| {
+            slot_leave.remove_css_class("cc-tray-drop-slot-hover");
+            let keep = TRAY_EDIT_MODE_ACTIVE.with(|c| c.get())
+                || TRAY_DRAG_ACTIVE.with(|c| c.get());
+            slot_leave.set_visible(keep);
+        });
+        let slot_drop = visual_slot.clone();
+        drop_target.connect_drop(move |_, value, _, _| {
+            slot_drop.remove_css_class("cc-tray-drop-slot-hover");
+            let Ok(raw) = value.get::<String>() else {
+                return false;
+            };
+            let Some(payload) = DragPayload::decode(&raw) else {
+                return false;
+            };
+            match payload {
+                DragPayload::FromControlCenter(kind) => {
+                    info!("📌 [TopBar] Fijando control {:?} en la bandeja del sistema", kind);
+                    pin_widget_to_tray(kind);
+                    true
+                }
+                DragPayload::FromTray(_) => false,
+            }
+        });
+        target_widget.add_controller(drop_target);
+    };
+    attach_tray_drop(&tray, &drop_plus_slot);
 
     // 7. Centro de Control macOS Unificado (Esquina derecha junto al Reloj)
     let cc_widget = super::control_center::create_control_center_widget();
@@ -122,6 +294,9 @@ pub fn create_status_tray_widget() -> GtkBox {
         wifi_widget.set_visible(cfg.wifi);
         vol_widget.set_visible(cfg.sound);
         spotlight_btn.set_visible(cfg.spotlight);
+        dark_mode_widget.set_visible(cfg.dark_mode);
+        desktop_finder_widget.set_visible(cfg.desktop_finder);
+        refresh_dark_mode_tray();
         super::power_profile::refresh_power_profile_visibility();
         super::auto_tiling::refresh_auto_tiling_visibility();
         extras.refresh(&cfg);
@@ -132,6 +307,66 @@ pub fn create_status_tray_widget() -> GtkBox {
     });
 
     tray
+}
+
+fn create_dark_mode_tray_button() -> (Button, Rc<dyn Fn()>) {
+    let btn = Button::builder()
+        .css_classes(["network-pill", "topbar-btn"])
+        .tooltip_text("Modo oscuro / claro (Arrastra al Centro de Control para quitar)")
+        .has_frame(false)
+        .build();
+
+    let ico = Image::builder()
+        .icon_name("dark-mode-symbolic")
+        .pixel_size(16)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    btn.set_child(Some(&ico));
+
+    let ico_ref = ico.clone();
+    let refresh: Rc<dyn Fn()> = Rc::new(move || {
+        ico_ref.queue_draw();
+    });
+
+    let rf_click = refresh.clone();
+    btn.connect_clicked(move |_| {
+        let next = !malus_de_common::config::is_dark_mode_active();
+        super::control_center::apply_system_appearance_mode(next);
+        rf_click();
+    });
+
+    (btn, refresh)
+}
+
+fn create_desktop_finder_tray_button() -> Button {
+    let btn = Button::builder()
+        .css_classes(["network-pill", "topbar-btn"])
+        .tooltip_text("Escritorio y Finder (Clic: Mostrar escritorio · Clic derecho: Branches)")
+        .has_frame(false)
+        .build();
+    let ico = Image::builder()
+        .icon_name("user-desktop-symbolic")
+        .pixel_size(15)
+        .build();
+    btn.set_child(Some(&ico));
+
+    btn.connect_clicked(move |_| {
+        let _ = malus_de_common::ipc::IpcClient::send_command(
+            malus_de_common::ipc::IpcMessage::ToggleShowDesktop,
+        );
+    });
+
+    let rclick = GestureClick::new();
+    rclick.set_button(3);
+    rclick.connect_pressed(move |_, _, _, _| {
+        let mut cmd = Command::new("malus-de-branches");
+        malus_de_common::config::set_cursor_environment(&mut cmd);
+        let _ = cmd.spawn();
+    });
+    btn.add_controller(rclick);
+
+    btn
 }
 
 fn create_keyboard_tray_button() -> Button {

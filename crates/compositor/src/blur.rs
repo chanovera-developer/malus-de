@@ -284,7 +284,6 @@ impl GaussianBlur {
                 gl.DeleteShader(blit_vert);
                 return None;
             };
-
             let down_program = link_program(gl, quad_vert, down_frag);
             let gaussian_program = link_program(gl, quad_vert, gaussian_frag);
             let blit_program = link_program(gl, blit_vert, blit_frag);
