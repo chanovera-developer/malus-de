@@ -2607,7 +2607,7 @@ impl IconGridMetrics {
     pub fn from_icon_size(icon_size: i32, extra_spacing: i32) -> Self {
         let icon_size = icon_size.max(16);
         let box_width = (icon_size + 44).max(72);
-        let box_height = (icon_size + 48).max(76);
+        let box_height = (icon_size + 54).max(82);
         let spacing = (Self::DEFAULT_GRID_SPACING + extra_spacing).max(4);
         Self {
             icon_size,

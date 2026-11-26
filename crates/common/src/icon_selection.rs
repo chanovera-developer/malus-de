@@ -234,7 +234,7 @@ pub fn populate_icon_with_macos_selection<W: IsA<gtk4::Widget>>(
 
     let inner_vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(7)
+        .spacing(12)
         .halign(Align::Fill)
         .valign(Align::Start)
         .hexpand(true)
@@ -294,7 +294,7 @@ pub fn populate_icon_with_macos_selection<W: IsA<gtk4::Widget>>(
                     let by = (cy - side * 0.5).max(1.0);
                     let max_bottom = label_bounds
                         .as_ref()
-                        .map(|(_, lb)| (lb.y() as f64 - 2.0).max(iy + ih + 2.0))
+                        .map(|(_, lb)| (lb.y() as f64 - 4.5).max(iy + ih + 2.0))
                         .unwrap_or(area_h - 1.0);
                     let bh = side.min(max_bottom - by).max(ih + 4.0);
                     let radius = (side.min(bh) * 0.17).clamp(8.0, 14.0);
@@ -310,7 +310,7 @@ pub fn populate_icon_with_macos_selection<W: IsA<gtk4::Widget>>(
                                 fg.red() as f64,
                                 fg.green() as f64,
                                 fg.blue() as f64,
-                                0.12,
+                                0.07,
                             );
                             let _ = cr.fill();
                         }
