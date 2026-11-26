@@ -1483,6 +1483,9 @@ fn reconcile_drm_outputs(
 
     state.relocate_primary_shell_layers_for_config(&displays_cfg, preserved_shell_layers);
     state.migrate_orphaned_windows_and_pointer();
+    if state.auto_tiling_enabled {
+        state.relayout_auto_tiling();
+    }
     for global in removed_globals {
         state.display_handle.remove_global::<MalusState>(global);
     }
@@ -3740,6 +3743,9 @@ pub fn run_drm() -> Result<()> {
                     if let Some(toplevel) = win.toplevel() {
                         toplevel.send_configure();
                     }
+                }
+                if state.auto_tiling_enabled {
+                    state.relayout_auto_tiling();
                 }
                 }
             }
@@ -7960,6 +7966,9 @@ pub fn run_drm() -> Result<()> {
                 }
                 state.notify_active_app(Some(&anim.surface));
                 state.notify_running_apps();
+                if state.auto_tiling_enabled {
+                    state.relayout_auto_tiling();
+                }
             } else {
                 state.notify_minimized_windows();
             }

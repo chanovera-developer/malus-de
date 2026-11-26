@@ -2354,6 +2354,9 @@ impl MalusState {
             self.notify_running_apps();
             self.notify_minimized_windows();
             self.notify_active_app(next_focus.as_ref());
+            if self.auto_tiling_enabled {
+                self.relayout_auto_tiling();
+            }
         }
     }
 
@@ -4001,6 +4004,9 @@ impl MalusState {
         if self.expose.active {
             self.refresh_expose_layout();
         }
+        if self.auto_tiling_enabled {
+            self.relayout_auto_tiling();
+        }
         tracing::info!(
             "🖥️ Espacio cambiado: Escritorio {} -> Escritorio {}",
             old_index + 1,
@@ -4861,6 +4867,204 @@ pub fn snap_window(
     state.space.raise_element(window, true);
 }
 
+/// Calcula el límite máximo de ventanas en mosaico para una pantalla según su resolución lógica.
+/// - Pantallas pequeñas (`width < 2000`): 2 ventanas (ej. 1366×768, 1920×1080, 4K @ 200%)
+/// - Pantallas grandes (`2000 <= width < 3200`): 3 ventanas (ej. 2560×1080, 2560×1440, 4K @ 150%)
+/// - Pantallas enormes (`width >= 3200`): 6 ventanas (ej. 3440×1440, 3840×2160, 5120×1440)
+pub fn auto_tiling_capacity_for_size(size: Size<i32, Logical>) -> usize {
+    if size.w >= 3200 {
+        6
+    } else if size.w >= 2000 {
+        3
+    } else {
+        2
+    }
+}
+
+/// Destino elegido por el planificador de Auto-Tiling para una ventana recién abierta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewWindowTileTarget {
+    /// Mantener en el escritorio activo y colocar en el monitor `output_idx`.
+    CurrentWorkspace { output_idx: usize },
+    /// Mover a un escritorio virtual existente `workspace_idx` (y cambiar a él).
+    ExistingWorkspace { workspace_idx: usize },
+    /// Crear un nuevo escritorio virtual en `workspace_idx` y mover ahí (y cambiar a él).
+    CreateWorkspace { workspace_idx: usize },
+    /// Todos los escritorios hasta `max_workspaces` están llenos: fallback en el escritorio actual
+    /// sobre el monitor menos cargado para no perder la ventana.
+    FallbackWorkspace { workspace_idx: usize, output_idx: usize },
+}
+
+/// Planifica dónde debe ubicarse una ventana recién abierta respetando:
+/// 1) Capacidad individual de su monitor preferido;
+/// 2) Resto de monitores conectados en el mismo escritorio activo;
+/// 3) Desbordamiento a otro escritorio virtual (creando uno nuevo hasta `max_workspaces`).
+pub fn plan_new_window_placement(
+    output_capacities: &[usize],
+    preferred_output_idx: usize,
+    active_output_counts: &[usize],
+    active_ws: usize,
+    workspace_window_counts: &[usize],
+    max_workspaces: usize,
+) -> NewWindowTileTarget {
+    if output_capacities.is_empty() {
+        return NewWindowTileTarget::CurrentWorkspace { output_idx: 0 };
+    }
+
+    let pref = preferred_output_idx.min(output_capacities.len() - 1);
+    if active_output_counts.get(pref).copied().unwrap_or(0) < output_capacities[pref] {
+        return NewWindowTileTarget::CurrentWorkspace { output_idx: pref };
+    }
+
+    for (idx, &cap) in output_capacities.iter().enumerate() {
+        if idx == pref {
+            continue;
+        }
+        if active_output_counts.get(idx).copied().unwrap_or(0) < cap {
+            return NewWindowTileTarget::CurrentWorkspace { output_idx: idx };
+        }
+    }
+
+    let ws_cap: usize = output_capacities.iter().sum::<usize>().max(1);
+    let ws_len = workspace_window_counts.len();
+
+    // 1. Buscar un escritorio posterior existente con espacio disponible.
+    for (ws_idx, &count) in workspace_window_counts
+        .iter()
+        .enumerate()
+        .skip(active_ws.saturating_add(1))
+    {
+        if count < ws_cap {
+            return NewWindowTileTarget::ExistingWorkspace {
+                workspace_idx: ws_idx,
+            };
+        }
+    }
+
+    // 2. Si todavía podemos crear un escritorio virtual nuevo, crearlo hacia adelante.
+    if ws_len < max_workspaces {
+        return NewWindowTileTarget::CreateWorkspace {
+            workspace_idx: ws_len,
+        };
+    }
+
+    // 3. Con todos los escritorios creados, revisar escritorios anteriores con espacio libre.
+    for (ws_idx, &count) in workspace_window_counts
+        .iter()
+        .enumerate()
+        .take(active_ws.min(ws_len))
+    {
+        if count < ws_cap {
+            return NewWindowTileTarget::ExistingWorkspace {
+                workspace_idx: ws_idx,
+            };
+        }
+    }
+
+    // 4. Fallback seguro si todos los escritorios están llenos: monitor menos cargado del escritorio activo.
+    let least_loaded = (0..output_capacities.len())
+        .min_by_key(|&idx| active_output_counts.get(idx).copied().unwrap_or(0))
+        .unwrap_or(0);
+    NewWindowTileTarget::FallbackWorkspace {
+        workspace_idx: active_ws,
+        output_idx: least_loaded,
+    }
+}
+
+/// Plan puro de rebalanceo del escritorio activo entre monitores y desbordamiento a otros escritorios.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RebalancePlan {
+    /// Para cada monitor `i`, índices de las ventanas asignadas a él.
+    pub per_output: Vec<Vec<usize>>,
+    /// Ventanas excedentes que deben moverse a otros escritorios: `(window_idx, target_ws_idx)`.
+    pub overflow_to_workspaces: Vec<(usize, usize)>,
+}
+
+/// Rebalancea una lista ordenada de ventanas del escritorio activo respetando las capacidades
+/// por pantalla (`capacities`), llenando primero monitores libres del mismo escritorio y enviando
+/// el resto a escritorios virtuales disponibles (creando hasta `max_workspaces`).
+pub fn plan_active_workspace_rebalance(
+    capacities: &[usize],
+    initial_assignments: &[usize],
+    active_ws: usize,
+    workspace_window_counts: &[usize],
+    max_workspaces: usize,
+) -> RebalancePlan {
+    let mut per_output: Vec<Vec<usize>> = vec![Vec::new(); capacities.len()];
+    if capacities.is_empty() || initial_assignments.is_empty() {
+        return RebalancePlan {
+            per_output,
+            overflow_to_workspaces: Vec::new(),
+        };
+    }
+
+    // Paso 1: conservar cada ventana en su monitor actual mientras no exceda su capacidad.
+    let mut excess = Vec::new();
+    for (win_idx, &mon_idx) in initial_assignments.iter().enumerate() {
+        let m = if mon_idx < capacities.len() {
+            mon_idx
+        } else {
+            0
+        };
+        if per_output[m].len() < capacities[m] {
+            per_output[m].push(win_idx);
+        } else {
+            excess.push(win_idx);
+        }
+    }
+
+    // Paso 2: repartir excedentes en otros monitores conectados del mismo escritorio.
+    let mut ws_overflow = Vec::new();
+    for win_idx in excess {
+        if let Some(free_mon) = (0..capacities.len()).find(|&m| per_output[m].len() < capacities[m])
+        {
+            per_output[free_mon].push(win_idx);
+        } else {
+            ws_overflow.push(win_idx);
+        }
+    }
+
+    // Paso 3: desbordar el remanente a otros escritorios virtuales.
+    let mut overflow_to_workspaces = Vec::new();
+    if !ws_overflow.is_empty() {
+        let ws_cap: usize = capacities.iter().sum::<usize>().max(1);
+        let mut simulated_counts = workspace_window_counts.to_vec();
+        if simulated_counts.len() <= active_ws {
+            simulated_counts.resize(active_ws + 1, 0);
+        }
+
+        for win_idx in ws_overflow {
+            let target_ws = ((active_ws + 1)..simulated_counts.len())
+                .find(|&ws| simulated_counts[ws] < ws_cap)
+                .or_else(|| {
+                    if simulated_counts.len() < max_workspaces {
+                        simulated_counts.push(0);
+                        Some(simulated_counts.len() - 1)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| (0..active_ws).find(|&ws| simulated_counts[ws] < ws_cap));
+
+            if let Some(ws) = target_ws {
+                simulated_counts[ws] += 1;
+                overflow_to_workspaces.push((win_idx, ws));
+            } else {
+                // Todos los escritorios hasta `max_workspaces` llenos: degradar en monitor menos cargado.
+                let least_loaded = (0..capacities.len())
+                    .min_by_key(|&m| per_output[m].len())
+                    .unwrap_or(0);
+                per_output[least_loaded].push(win_idx);
+            }
+        }
+    }
+
+    RebalancePlan {
+        per_output,
+        overflow_to_workspaces,
+    }
+}
+
 /// Calcula rectángulos mosaico no solapados dentro de `usable_zone` para `count` ventanas.
 pub fn compute_auto_tiling_slots(
     count: usize,
@@ -4887,6 +5091,18 @@ pub fn compute_auto_tiling_slots(
         ];
     }
     if count == 3 {
+        // En monitores ultrawide (relación >= 2.1:1) usar 3 columnas verticales equilibradas;
+        // en pantallas 16:9 / 16:10 usar maestro (50% izq) + 2 apiladas (der).
+        let aspect = uw as f64 / uh.max(1) as f64;
+        if aspect >= 2.1 {
+            let col_w = (uw - 2 * gap) / 3;
+            let last_w = uw - 2 * gap - 2 * col_w;
+            return vec![
+                Rectangle::new((ux, uy).into(), (col_w, uh).into()),
+                Rectangle::new((ux + col_w + gap, uy).into(), (col_w, uh).into()),
+                Rectangle::new((ux + 2 * (col_w + gap), uy).into(), (last_w, uh).into()),
+            ];
+        }
         let lw = (uw - gap) / 2;
         let rw = uw - gap - lw;
         let th = (uh - gap) / 2;
@@ -4960,6 +5176,8 @@ fn apply_tile_rect(
     let target_loc = Point::from((rect.loc.x, rect.loc.y + ssd_top));
     let target_size = Size::from((rect.size.w.max(120), (rect.size.h - ssd_top).max(120)));
 
+    state.initially_placed_windows.insert(surface.clone());
+
     if (start_loc != target_loc || start_size != target_size)
         && start_size.w > 0
         && start_size.h > 0
@@ -4982,73 +5200,409 @@ fn apply_tile_rect(
         toplevel.with_pending_state(|top_state| {
             top_state.size = Some(target_size);
             unset_snap_states(top_state);
+            top_state.states.set(XdgState::TiledLeft);
+            top_state.states.set(XdgState::TiledRight);
+            top_state.states.set(XdgState::TiledTop);
+            top_state.states.set(XdgState::TiledBottom);
         });
         toplevel.send_configure();
+    } else if let Some(x11) = window.x11_surface() {
+        let _ = x11.set_maximized(false);
+        let _ = x11.configure(Some(Rectangle::new(target_loc, target_size)));
     }
     state.space.map_element(window.clone(), target_loc, false);
 }
 
+fn sync_window_output_and_scale(
+    state: &MalusState,
+    window: &smithay::desktop::Window,
+    target_output: &Output,
+) {
+    let Some(wl_surf) = window.wl_surface() else {
+        return;
+    };
+    let target_scale = target_output.current_scale().fractional_scale();
+    let other_outputs: Vec<Output> = state
+        .space
+        .outputs()
+        .filter(|o| *o != target_output)
+        .cloned()
+        .collect();
+    smithay::wayland::compositor::with_surface_tree_downward(
+        wl_surf.as_ref(),
+        (),
+        |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+        |surf, states, _| {
+            for old in &other_outputs {
+                old.leave(surf);
+            }
+            target_output.enter(surf);
+            with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(target_scale);
+            });
+        },
+        |_, _, _| true,
+    );
+}
+
+fn is_window_tileable(state: &MalusState, window: &smithay::desktop::Window) -> bool {
+    let Some(surf) = window.wl_surface() else {
+        return false;
+    };
+    if state.minimized_windows.contains_key(surf.as_ref()) {
+        return false;
+    }
+    let is_fullscreen = window
+        .toplevel()
+        .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+        .or_else(|| window.x11_surface().map(|x| x.is_fullscreen()))
+        .unwrap_or(false);
+    if is_fullscreen {
+        return false;
+    }
+    if let Some(toplevel) = window.toplevel() {
+        if toplevel.parent().is_some() {
+            return false;
+        }
+        let geo = window.geometry();
+        if geo.size.w <= 1 || geo.size.h <= 1 {
+            return false;
+        }
+    }
+    if let Some(x11) = window.x11_surface() {
+        if x11.is_override_redirect() || x11.is_popup() || x11.is_transient_for().is_some() {
+            return false;
+        }
+    }
+    if let Some(id) = app_id_for_surface(surf.as_ref()) {
+        let lower = id.to_lowercase();
+        if is_quicklook_identifier(&lower) || lower.contains("malus-de-dialogs") {
+            return false;
+        }
+    }
+    true
+}
+
 impl MalusState {
+    fn ordered_auto_tiling_outputs(&self) -> Vec<Output> {
+        let primary = self.primary_output();
+        let mut outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        outputs.sort_by(|a, b| {
+            let a_primary = primary.as_ref().is_some_and(|p| p == a);
+            let b_primary = primary.as_ref().is_some_and(|p| p == b);
+            b_primary
+                .cmp(&a_primary)
+                .then_with(|| {
+                    let ga = self.space.output_geometry(a).unwrap_or_default();
+                    let gb = self.space.output_geometry(b).unwrap_or_default();
+                    (ga.loc.x, ga.loc.y).cmp(&(gb.loc.x, gb.loc.y))
+                })
+                .then_with(|| a.name().cmp(&b.name()))
+        });
+        outputs
+    }
+
+    fn auto_tiling_capacity_for_output(&self, output: &Output) -> usize {
+        let size = self
+            .space
+            .output_geometry(output)
+            .map(|g| g.size)
+            .unwrap_or_else(|| Size::from((1920, 1080)));
+        auto_tiling_capacity_for_size(size)
+    }
+
+    fn tileable_window_counts_per_workspace(
+        &self,
+        exclude_active: Option<&smithay::desktop::Window>,
+    ) -> Vec<usize> {
+        let active_ws = self.workspaces.active_index;
+        self.workspaces
+            .workspaces
+            .iter()
+            .enumerate()
+            .map(|(idx, ws)| {
+                if idx == active_ws {
+                    self.space
+                        .elements()
+                        .filter(|w| {
+                            exclude_active.is_none_or(|ex| ex != *w) && is_window_tileable(self, w)
+                        })
+                        .count()
+                } else {
+                    ws.hidden_windows
+                        .iter()
+                        .filter(|entry| is_window_tileable(self, &entry.window))
+                        .count()
+                }
+            })
+            .collect()
+    }
+
+    fn move_window_to_workspace_for_tiling(
+        &mut self,
+        window: smithay::desktop::Window,
+        target_index: usize,
+        target_loc: Point<i32, Logical>,
+    ) {
+        if target_index >= self.workspaces.count() || target_index == self.workspaces.active_index {
+            return;
+        }
+        if let Some(surf) = window.wl_surface() {
+            self.snap_transitions.remove(surf.as_ref());
+            self.initially_placed_windows.insert(surf.into_owned());
+        }
+        self.space.unmap_elem(&window);
+        self.workspaces.workspaces[target_index]
+            .hidden_windows
+            .push(crate::workspaces::WorkspaceWindow {
+                window,
+                location: target_loc,
+            });
+        self.workspace_revision = self.workspace_revision.wrapping_add(1);
+    }
+
+    /// Recalcula y aplica el mosaico automático en cada pantalla activa si `auto_tiling_enabled` está activo,
+    /// respetando el límite por resolución de cada pantalla, llenando monitores secundarios antes de
+    /// desbordar a otros escritorios virtuales.
+    pub fn relayout_auto_tiling(&mut self) {
+        if !self.auto_tiling_enabled {
+            return;
+        }
+        let outputs = self.ordered_auto_tiling_outputs();
+        if outputs.is_empty() {
+            return;
+        }
+        let capacities: Vec<usize> = outputs
+            .iter()
+            .map(|o| self.auto_tiling_capacity_for_output(o))
+            .collect();
+
+        let mut tileable: Vec<smithay::desktop::Window> = self
+            .space
+            .elements()
+            .filter(|w| is_window_tileable(self, w))
+            .cloned()
+            .collect();
+        if tileable.is_empty() {
+            return;
+        }
+
+        // Orden estable por window_id ascendente para no reordenar ventanas al cambiar el foco.
+        tileable.sort_by_key(|w| {
+            w.wl_surface()
+                .and_then(|s| self.window_ids.get(s.as_ref()).copied())
+                .unwrap_or(u64::MAX)
+        });
+
+        let initial_assignments: Vec<usize> = tileable
+            .iter()
+            .map(|w| {
+                self.origin_output_for_window(w)
+                    .and_then(|o| outputs.iter().position(|cand| cand == &o))
+                    .unwrap_or(0)
+            })
+            .collect();
+
+        let active_ws = self.workspaces.active_index;
+        let workspace_counts = self.tileable_window_counts_per_workspace(None);
+        let plan = plan_active_workspace_rebalance(
+            &capacities,
+            &initial_assignments,
+            active_ws,
+            &workspace_counts,
+            crate::workspaces::MAX_WORKSPACES,
+        );
+
+        let primary_spawn_loc = self.usable_zone_for_output(&outputs[0]).loc;
+        let mut moved_any_workspace = false;
+        for (win_idx, target_ws) in plan.overflow_to_workspaces {
+            while self.workspaces.count() <= target_ws {
+                if self.workspaces.add_workspace().is_none() {
+                    break;
+                }
+            }
+            if target_ws < self.workspaces.count() && target_ws != active_ws {
+                let win = tileable[win_idx].clone();
+                sync_window_output_and_scale(self, &win, &outputs[0]);
+                self.move_window_to_workspace_for_tiling(win, target_ws, primary_spawn_loc);
+                moved_any_workspace = true;
+            }
+        }
+
+        let gap = if self.desktop_dock_cfg.tiled_windows_have_margins {
+            8
+        } else {
+            2
+        };
+
+        for (out_idx, win_indices) in plan.per_output.into_iter().enumerate() {
+            if win_indices.is_empty() {
+                continue;
+            }
+            let output = &outputs[out_idx];
+            let usable = self.usable_zone_for_output(output);
+            let slots = compute_auto_tiling_slots(win_indices.len(), usable, gap);
+            for (win_idx, rect) in win_indices.into_iter().zip(slots.into_iter()) {
+                let win = &tileable[win_idx];
+                sync_window_output_and_scale(self, win, output);
+                apply_tile_rect(self, win, rect);
+            }
+        }
+
+        if moved_any_workspace {
+            self.space.refresh();
+            self.notify_running_apps();
+            if self.expose.active {
+                self.refresh_expose_layout();
+            }
+        }
+        self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+    }
+
+    /// Coloca una ventana recién abierta aplicando el límite por resolución de cada pantalla,
+    /// llenando pantallas secundarias antes de pasar a otro escritorio virtual (al cual cambia automáticamente).
+    pub fn place_new_window_with_auto_tiling(&mut self, window: &smithay::desktop::Window) {
+        if !self.auto_tiling_enabled || !is_window_tileable(self, window) {
+            return;
+        }
+        if let Some(surf) = window.wl_surface() {
+            self.get_or_assign_window_id(surf.as_ref());
+            self.initially_placed_windows.insert(surf.into_owned());
+        }
+
+        let outputs = self.ordered_auto_tiling_outputs();
+        if outputs.is_empty() {
+            return;
+        }
+        let capacities: Vec<usize> = outputs
+            .iter()
+            .map(|o| self.auto_tiling_capacity_for_output(o))
+            .collect();
+
+        let preferred_output_idx = self
+            .origin_output_for_window(window)
+            .and_then(|o| outputs.iter().position(|cand| cand == &o))
+            .unwrap_or(0);
+
+        let mut active_output_counts = vec![0usize; outputs.len()];
+        for other in self.space.elements() {
+            if other == window || !is_window_tileable(self, other) {
+                continue;
+            }
+            let idx = self
+                .origin_output_for_window(other)
+                .and_then(|o| outputs.iter().position(|cand| cand == &o))
+                .unwrap_or(0);
+            active_output_counts[idx] += 1;
+        }
+
+        let active_ws = self.workspaces.active_index;
+        let workspace_counts = self.tileable_window_counts_per_workspace(Some(window));
+        let target = plan_new_window_placement(
+            &capacities,
+            preferred_output_idx,
+            &active_output_counts,
+            active_ws,
+            &workspace_counts,
+            crate::workspaces::MAX_WORKSPACES,
+        );
+
+        match target {
+            NewWindowTileTarget::CurrentWorkspace { output_idx }
+            | NewWindowTileTarget::FallbackWorkspace { output_idx, .. } => {
+                let clamped_idx = output_idx.min(outputs.len() - 1);
+                if clamped_idx != preferred_output_idx {
+                    let dest_output = &outputs[clamped_idx];
+                    let dest_usable = self.usable_zone_for_output(dest_output);
+                    let cur_size = window.geometry().size;
+                    let dest_loc = Point::from((
+                        dest_usable.loc.x + ((dest_usable.size.w - cur_size.w) / 2).max(0),
+                        dest_usable.loc.y + ((dest_usable.size.h - cur_size.h) / 2).max(0),
+                    ));
+                    sync_window_output_and_scale(self, window, dest_output);
+                    self.space.map_element(window.clone(), dest_loc, false);
+                    self.space.refresh();
+                }
+                self.relayout_auto_tiling();
+            }
+            NewWindowTileTarget::ExistingWorkspace { workspace_idx } => {
+                let primary_loc = self.usable_zone_for_output(&outputs[0]).loc;
+                sync_window_output_and_scale(self, window, &outputs[0]);
+                self.move_window_to_workspace_for_tiling(
+                    window.clone(),
+                    workspace_idx,
+                    primary_loc,
+                );
+                self.space.refresh();
+                self.notify_running_apps();
+                self.relayout_auto_tiling();
+                self.switch_workspace(workspace_idx);
+                tracing::info!(
+                    "🧩 Auto-Tiling: pantallas llenas en Escritorio {}, nueva ventana enviada a Escritorio {}",
+                    active_ws + 1,
+                    workspace_idx + 1
+                );
+            }
+            NewWindowTileTarget::CreateWorkspace { workspace_idx: _ } => {
+                if let Some(new_ws) = self.workspaces.add_workspace() {
+                    let primary_loc = self.usable_zone_for_output(&outputs[0]).loc;
+                    sync_window_output_and_scale(self, window, &outputs[0]);
+                    self.move_window_to_workspace_for_tiling(window.clone(), new_ws, primary_loc);
+                    self.space.refresh();
+                    self.notify_running_apps();
+                    self.relayout_auto_tiling();
+                    self.switch_workspace(new_ws);
+                    tracing::info!(
+                        "🧩 Auto-Tiling: creado Escritorio {} por desbordamiento desde Escritorio {}",
+                        new_ws + 1,
+                        active_ws + 1
+                    );
+                } else {
+                    self.relayout_auto_tiling();
+                }
+            }
+        }
+    }
+
     /// Alterna el ordenamiento automático de ventanas (Auto-Tiling) en las pantallas activas.
     pub fn toggle_auto_tiling(&mut self) {
         self.auto_tiling_enabled = !self.auto_tiling_enabled;
         let enabled = self.auto_tiling_enabled;
-        let outputs: Vec<smithay::output::Output> = self.space.outputs().cloned().collect();
-        let all_windows: Vec<smithay::desktop::Window> = self
-            .space
-            .elements()
-            .filter(|w| {
-                w.wl_surface()
-                    .is_some_and(|s| !self.minimized_windows.contains_key(s.as_ref()))
-            })
-            .cloned()
-            .collect();
 
         if enabled {
-            let gap = if self.desktop_dock_cfg.tiled_windows_have_margins {
-                8
-            } else {
-                2
-            };
-            for output in &outputs {
-                let usable = self.usable_zone_for_output(output);
-                let out_geo = self.space.output_geometry(output);
-                let wins: Vec<smithay::desktop::Window> = all_windows
-                    .iter()
-                    .filter(|w| {
-                        let outs = self.space.outputs_for_element(w);
-                        if !outs.is_empty() {
-                            outs.iter().any(|o| o == output)
-                        } else if let (Some(loc), Some(og)) =
-                            (self.space.element_location(w), out_geo)
-                        {
-                            og.contains(loc)
-                        } else {
-                            outputs.first() == Some(output)
-                        }
-                    })
-                    .cloned()
-                    .collect();
-                let slots = compute_auto_tiling_slots(wins.len(), usable, gap);
-                for (win, rect) in wins.into_iter().zip(slots.into_iter()) {
-                    apply_tile_rect(self, &win, rect);
-                }
-            }
+            self.relayout_auto_tiling();
         } else {
+            let outputs: Vec<smithay::output::Output> = self.space.outputs().cloned().collect();
+            let all_windows: Vec<smithay::desktop::Window> = self
+                .space
+                .elements()
+                .filter(|w| is_window_tileable(self, w))
+                .cloned()
+                .collect();
             let fallback = outputs
                 .first()
                 .map(|o| self.usable_zone_for_output(o))
                 .unwrap_or_else(|| Rectangle::new((0, 32).into(), (1920, 1000).into()));
             for win in all_windows {
                 let usable = self
-                    .space
-                    .outputs_for_element(&win)
-                    .into_iter()
-                    .next()
+                    .origin_output_for_window(&win)
                     .map(|o| self.usable_zone_for_output(&o))
                     .unwrap_or(fallback);
-                snap_window(self, &win, SnapMode::CenterRestore, usable);
+                if let Some(x11) = win.x11_surface() {
+                    if let Some(surf) = win.wl_surface() {
+                        if let Some((saved_loc, saved_size)) =
+                            self.window_restore_geometries.get(surf.as_ref()).copied()
+                        {
+                            let _ = x11.set_maximized(false);
+                            let _ = x11.configure(Some(Rectangle::new(saved_loc, saved_size)));
+                            self.space.map_element(win.clone(), saved_loc, false);
+                        }
+                    }
+                } else {
+                    snap_window(self, &win, SnapMode::CenterRestore, usable);
+                }
             }
+            self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
         }
 
         self.ipc_broadcaster
@@ -6953,7 +7507,10 @@ impl CompositorHandler for MalusState {
                             || states.contains(XdgState::TiledRight)
                             || states.contains(XdgState::TiledTop)
                             || states.contains(XdgState::TiledBottom);
-                        if is_window_snapped(&window)
+                        if self.auto_tiling_enabled && is_window_tileable(self, &window) {
+                            self.initially_placed_windows.insert(surface.clone());
+                            self.place_new_window_with_auto_tiling(&window);
+                        } else if is_window_snapped(&window)
                             || is_snapped_state
                             || self.snap_transitions.contains_key(surface)
                             || self.minimized_windows.contains_key(surface)
@@ -7957,6 +8514,9 @@ impl XdgShellHandler for MalusState {
             .is_some_and(|lower| is_quicklook_identifier(&lower));
 
         self.space.refresh();
+        if self.auto_tiling_enabled {
+            self.relayout_auto_tiling();
+        }
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let (next_win, next_surface) = if destroyed_is_quicklook {
@@ -9836,11 +10396,14 @@ mod tests {
         let usable = smithay::utils::Rectangle::new((0, 36).into(), (1920, 1000).into());
         assert!(super::compute_auto_tiling_slots(0, usable, 8).is_empty());
 
-        for count in 1..=5 {
+        for count in 1..=6 {
             let slots = super::compute_auto_tiling_slots(count, usable, 8);
             assert_eq!(slots.len(), count);
             for (i, a) in slots.iter().enumerate() {
-                assert!(usable.contains_rect(*a), "slot {i} out of usable bounds: {a:?}");
+                assert!(
+                    usable.contains_rect(*a),
+                    "slot {i} out of usable bounds: {a:?}"
+                );
                 for (j, b) in slots.iter().enumerate().skip(i + 1) {
                     assert!(
                         !a.overlaps(*b),
@@ -9849,6 +10412,148 @@ mod tests {
                 }
             }
         }
+
+        // Ultrawide (relación >= 2.1:1): con 3 ventanas deben ser 3 columnas de altura completa.
+        let ultrawide = smithay::utils::Rectangle::new((0, 36).into(), (3440, 1400).into());
+        let uw_slots = super::compute_auto_tiling_slots(3, ultrawide, 8);
+        assert_eq!(uw_slots.len(), 3);
+        assert_eq!(uw_slots[0].size.h, uw_slots[1].size.h);
+        assert_eq!(uw_slots[1].size.h, uw_slots[2].size.h);
+        assert!(uw_slots[0].loc.x < uw_slots[1].loc.x);
+        assert!(uw_slots[1].loc.x < uw_slots[2].loc.x);
+    }
+
+    #[test]
+    fn auto_tiling_capacity_scales_with_logical_resolution() {
+        use smithay::utils::Size;
+
+        // Pantallas pequeñas (< 2000 lógico) -> 2 ventanas
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((1366, 768))), 2);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((1920, 1080))), 2);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((1999, 1080))), 2);
+
+        // Pantallas grandes (2000..3199 lógico) -> 3 ventanas
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((2000, 1080))), 3);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((2560, 1440))), 3);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((2880, 1620))), 3);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((3199, 1800))), 3);
+
+        // Pantallas enormes (>= 3200 lógico) -> 6 ventanas
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((3200, 1800))), 6);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((3440, 1440))), 6);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((3840, 2160))), 6);
+        assert_eq!(super::auto_tiling_capacity_for_size(Size::from((5120, 1440))), 6);
+    }
+
+    #[test]
+    fn auto_tiling_single_monitor_overflows_by_resolution_tier() {
+        use super::NewWindowTileTarget;
+
+        // Pantalla pequeña (cap = 2): 1ª y 2ª en escritorio 0; 3ª -> escritorio 1; 5ª -> crea escritorio 2.
+        assert_eq!(
+            super::plan_new_window_placement(&[2], 0, &[1], 0, &[1, 0], 8),
+            NewWindowTileTarget::CurrentWorkspace { output_idx: 0 }
+        );
+        assert_eq!(
+            super::plan_new_window_placement(&[2], 0, &[2], 0, &[2, 0], 8),
+            NewWindowTileTarget::ExistingWorkspace { workspace_idx: 1 }
+        );
+        assert_eq!(
+            super::plan_new_window_placement(&[2], 0, &[2], 1, &[2, 2], 8),
+            NewWindowTileTarget::CreateWorkspace { workspace_idx: 2 }
+        );
+
+        // Pantalla grande (cap = 3): hasta 3 en escritorio 0; 4ª -> escritorio 1.
+        assert_eq!(
+            super::plan_new_window_placement(&[3], 0, &[2], 0, &[2, 0], 8),
+            NewWindowTileTarget::CurrentWorkspace { output_idx: 0 }
+        );
+        assert_eq!(
+            super::plan_new_window_placement(&[3], 0, &[3], 0, &[3, 0], 8),
+            NewWindowTileTarget::ExistingWorkspace { workspace_idx: 1 }
+        );
+
+        // Pantalla enorme (cap = 6): hasta 6 en escritorio 0; 7ª -> escritorio 1.
+        assert_eq!(
+            super::plan_new_window_placement(&[6], 0, &[5], 0, &[5, 0], 8),
+            NewWindowTileTarget::CurrentWorkspace { output_idx: 0 }
+        );
+        assert_eq!(
+            super::plan_new_window_placement(&[6], 0, &[6], 0, &[6, 0], 8),
+            NewWindowTileTarget::ExistingWorkspace { workspace_idx: 1 }
+        );
+    }
+
+    #[test]
+    fn auto_tiling_fills_secondary_monitor_before_second_workspace() {
+        use super::NewWindowTileTarget;
+
+        // Monitor principal grande (cap=3) + monitor secundario pequeño (cap=2) => 5 por escritorio.
+        let caps = [3, 2];
+
+        // Ventana 4 cuando el principal está lleno (3/3) y el secundario vacío (0/2) -> monitor secundario en mismo escritorio.
+        assert_eq!(
+            super::plan_new_window_placement(&caps, 0, &[3, 0], 0, &[3, 0], 8),
+            NewWindowTileTarget::CurrentWorkspace { output_idx: 1 }
+        );
+        // Ventana 5 -> llena segundo hueco del monitor secundario en el mismo escritorio.
+        assert_eq!(
+            super::plan_new_window_placement(&caps, 0, &[3, 1], 0, &[4, 0], 8),
+            NewWindowTileTarget::CurrentWorkspace { output_idx: 1 }
+        );
+        // Ventana 6 -> ambos monitores llenos (3/3 y 2/2) => desborda a Escritorio 2.
+        assert_eq!(
+            super::plan_new_window_placement(&caps, 0, &[3, 2], 0, &[5, 0], 8),
+            NewWindowTileTarget::ExistingWorkspace { workspace_idx: 1 }
+        );
+
+        // Con los 8 escritorios completamente llenos, degrada al monitor menos cargado sin perder la ventana.
+        let all_full = [5; 8];
+        assert_eq!(
+            super::plan_new_window_placement(&caps, 0, &[3, 2], 7, &all_full, 8),
+            NewWindowTileTarget::FallbackWorkspace {
+                workspace_idx: 7,
+                output_idx: 1
+            }
+        );
+    }
+
+    #[test]
+    fn auto_tiling_rebalance_distributes_across_monitors_and_workspaces() {
+        // Principal grande (3) + secundario pequeño (2), 7 ventanas abiertas todas en monitor 0.
+        let plan = super::plan_active_workspace_rebalance(
+            &[3, 2],
+            &[0, 0, 0, 0, 0, 0, 0],
+            0,
+            &[7, 0],
+            8,
+        );
+        assert_eq!(plan.per_output, vec![vec![0, 1, 2], vec![3, 4]]);
+        assert_eq!(plan.overflow_to_workspaces, vec![(5, 1), (6, 1)]);
+
+        // Rebalanceo masivo (12 ventanas en 2+2 monitores, 2 escritorios iniciales):
+        // 4 en ws 0, 4 en ws 1, 4 en nuevo ws 2.
+        let plan_many = super::plan_active_workspace_rebalance(
+            &[2, 2],
+            &[0; 12],
+            0,
+            &[12, 0],
+            8,
+        );
+        assert_eq!(plan_many.per_output, vec![vec![0, 1], vec![2, 3]]);
+        assert_eq!(
+            plan_many.overflow_to_workspaces,
+            vec![
+                (4, 1),
+                (5, 1),
+                (6, 1),
+                (7, 1),
+                (8, 2),
+                (9, 2),
+                (10, 2),
+                (11, 2),
+            ]
+        );
     }
 
     #[test]

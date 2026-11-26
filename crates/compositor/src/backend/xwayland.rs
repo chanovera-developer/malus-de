@@ -168,6 +168,9 @@ pub fn map_window(state: &mut MalusState, surface: X11Surface) {
     }
     state.notify_running_apps();
     state.notify_active_app(Some(&wl_surface));
+    if state.auto_tiling_enabled {
+        state.place_new_window_with_auto_tiling(&window);
+    }
     info!("Ventana X11 mapeada: {}", surface.title());
 }
 
@@ -211,6 +214,9 @@ pub fn unmap_window(state: &mut MalusState, surface: &X11Surface) {
         }
     }
     state.space.refresh();
+    if state.auto_tiling_enabled {
+        state.relayout_auto_tiling();
+    }
     state.notify_running_apps();
     info!("Ventana X11 desmapeada: {}", surface.title());
 }

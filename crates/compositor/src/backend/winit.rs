@@ -1274,6 +1274,9 @@ pub fn run_winit() -> Result<()> {
                         &current_displays_cfg,
                         Vec::new(),
                     );
+                    if state.auto_tiling_enabled {
+                        state.relayout_auto_tiling();
+                    }
                     squircle_corner_cache.clear();
                 }
 
@@ -3239,6 +3242,9 @@ pub fn run_winit() -> Result<()> {
                             if let Some(kb) = state.seat.get_keyboard() {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 kb.set_focus(&mut state, Some(anim.surface.clone()), serial);
+                            }
+                            if state.auto_tiling_enabled {
+                                state.relayout_auto_tiling();
                             }
                             if let Some(pointer) = state.seat.get_pointer() {
                                 let loc = pointer.current_location();
