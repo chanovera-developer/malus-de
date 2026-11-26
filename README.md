@@ -51,10 +51,10 @@ curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/a
 | ![Transición entre modo claro y modo oscuro](./assets/screenshots/dark-mode.webp) | ![Animación GPU Genie al minimizar y restaurar](./assets/screenshots/Genie.webp) |
 | **Transición GPU** fluida entre tema claro y oscuro. | **Animación Genie** al minimizar y restaurar ventanas hacia el Dock. |
 
-| Efecto Black Hole | Canopy (PiP) |
+| Efecto Black Hole | Canopy (buscador rápido) |
 | :---: | :---: |
-| ![Efecto GPU Black Hole al cerrar ventanas](./assets/screenshots/Black-hole.webp) | ![Canopy Picture-in-Picture flotante](./assets/screenshots/Canopy.webp) |
-| **Black Hole** al cerrar ventanas con colapso por shader GPU. | **Canopy (PiP)** flotante integrado directamente en el compositor. |
+| ![Efecto GPU Black Hole al cerrar ventanas](./assets/screenshots/Black-hole.webp) | ![Canopy buscador universal y lanzador rápido](./assets/screenshots/Canopy.webp) |
+| **Black Hole** al cerrar ventanas con colapso por shader GPU. | **Canopy**, lanzador y buscador universal de apps, archivos, carpetas y portapapeles. |
 
 ## Qué incluye
 
