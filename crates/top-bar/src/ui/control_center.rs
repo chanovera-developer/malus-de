@@ -1717,7 +1717,7 @@ fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label, Label) {
     let chevron = Image::builder()
         .icon_name("go-next-symbolic")
         .pixel_size(14)
-        .opacity(0.65)
+        .css_classes(["cc-focus-chevron"])
         .valign(Align::Center)
         .build();
 
