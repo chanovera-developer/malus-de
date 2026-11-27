@@ -1181,16 +1181,25 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
             .build(),
     );
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
+    let shake_initial = malus_de_common::config::InputConfig::load().shake_to_find_cursor;
     c3.append(&a11y_switch_row(
         "Agitar puntero del mouse para encontrarlo",
         Some("Mueve rápidamente el puntero del mouse de un lado a otro para agrandarlo."),
-        cfg.borrow().shake_mouse_to_locate,
+        shake_initial,
         false,
         {
             let c = cfg.clone();
             move |v| {
                 c.borrow_mut().shake_mouse_to_locate = v;
                 c.borrow().save();
+                let mut input_cfg = malus_de_common::config::InputConfig::load();
+                input_cfg.shake_to_find_cursor = v;
+                let _ = input_cfg.save();
+                std::thread::spawn(|| {
+                    let _ = malus_de_common::ipc::IpcClient::send_command(
+                        malus_de_common::ipc::IpcMessage::ReloadInputConfig,
+                    );
+                });
             }
         },
     ));

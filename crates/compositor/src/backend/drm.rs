@@ -10,7 +10,7 @@ use smithay::{
         input::{
             AbsolutePositionEvent, Axis, ButtonState, Event, GestureBeginEvent, GestureEndEvent,
             GesturePinchUpdateEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
-            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, TouchEvent,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
@@ -86,6 +86,9 @@ fn apply_libinput_device_config(
     if device.config_tap_finger_count() > 0 {
         let _ = device.config_tap_set_enabled(cfg.trackpad_tap_to_click);
         let _ = device.config_tap_set_drag_enabled(cfg.trackpad_tap_to_click);
+        if device.config_dwt_is_available() {
+            let _ = device.config_dwt_set_enabled(cfg.trackpad_disable_while_typing);
+        }
         if device.config_scroll_has_natural_scroll() {
             let _ = device.config_scroll_set_natural_scroll_enabled(cfg.natural_scrolling);
         }
@@ -587,6 +590,7 @@ struct DrmOutputSurface {
     flip_pending: Option<Instant>,
     last_cursor_draw_point: Option<(i32, i32)>,
     last_cursor_status: smithay::input::pointer::CursorImageStatus,
+    last_cursor_scale_milli: i32,
     last_background_commit_counter: usize,
     last_background_size: (i32, i32),
     background_dirty: bool,
@@ -1163,6 +1167,7 @@ fn create_drm_output_surface_for_connector(
         flip_pending: None,
         last_cursor_draw_point: None,
         last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+        last_cursor_scale_milli: 1000,
         last_background_commit_counter: usize::MAX,
         last_background_size: (0, 0),
         background_dirty: true,
@@ -2272,6 +2277,7 @@ pub fn run_drm() -> Result<()> {
         }
     };
     let _pointer = state.seat.add_pointer();
+    let _touch = state.seat.add_touch();
 
     // 5. Descubrir conectores físicos y configurar superficies de pantalla
     let res_handles = drm_device
@@ -2846,6 +2852,12 @@ pub fn run_drm() -> Result<()> {
                     current_pos.y += event.delta_y();
                     let point = clamp_pointer_location(state, current_pos);
                     state.last_pointer_location = Some(point);
+                    state.shake_cursor.record_motion(
+                        event.delta_x(),
+                        event.delta_y(),
+                        Instant::now(),
+                        state.input_cfg.shake_to_find_cursor,
+                    );
                     state.spotlight.update_dock_drag_location(point);
 
                     if state.spotlight.is_open() {
@@ -2917,6 +2929,12 @@ pub fn run_drm() -> Result<()> {
                         point.y += output_geo.loc.y as f64;
                         let point = clamp_pointer_location(state, point);
                         state.last_pointer_location = Some(point);
+                        state.shake_cursor.record_motion(
+                            point.x - cur.x,
+                            point.y - cur.y,
+                            Instant::now(),
+                            state.input_cfg.shake_to_find_cursor,
+                        );
                         state.spotlight.update_dock_drag_location(point);
 
                         if state.spotlight.is_open() {
@@ -3494,6 +3512,141 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
             }
+            InputEvent::GestureHoldBegin { event } => {
+                if let Some(pointer) = state.seat.get_pointer() {
+                    pointer.gesture_hold_begin(
+                        state,
+                        &smithay::input::pointer::GestureHoldBeginEvent {
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time_msec(),
+                            fingers: event.fingers(),
+                        },
+                    );
+                }
+            }
+            InputEvent::GestureHoldEnd { event } => {
+                if let Some(pointer) = state.seat.get_pointer() {
+                    pointer.gesture_hold_end(
+                        state,
+                        &smithay::input::pointer::GestureHoldEndEvent {
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time_msec(),
+                            cancelled: event.cancelled(),
+                        },
+                    );
+                }
+            }
+            InputEvent::TouchDown { event } => {
+                if let Some(touch) = state.seat.get_touch() {
+                    let output = state
+                        .primary_output()
+                        .or_else(|| state.space.outputs().next().cloned());
+                    if let Some(output) = output {
+                        let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                        let mut point = event.position_transformed(output_geo.size);
+                        point.x += output_geo.loc.x as f64;
+                        point.y += output_geo.loc.y as f64;
+                        let point = clamp_pointer_location(state, point);
+                        state.last_pointer_location = Some(point);
+
+                        let (under_target, layer_info, regular_win, _) =
+                            resolve_target_under(state, point);
+                        if let Some((ref win, _)) = regular_win {
+                            let was_already_top = state
+                                .space
+                                .elements()
+                                .last()
+                                .map(|w| w == win)
+                                .unwrap_or(false);
+                            if !was_already_top {
+                                state.space.raise_element(win, true);
+                            }
+                            if let Some(surface) = win.wl_surface() {
+                                if let Some(keyboard) = state.seat.get_keyboard() {
+                                    if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                        let kb_serial = SERIAL_COUNTER.next_serial();
+                                        keyboard.set_focus(
+                                            state,
+                                            Some(surface.clone().into_owned()),
+                                            kb_serial,
+                                        );
+                                        state.notify_active_app(Some(&surface));
+                                    } else {
+                                        state.sync_window_activation(Some(surface.as_ref()));
+                                    }
+                                }
+                            }
+                        } else if let Some((ref surf, _, can_kb)) = layer_info {
+                            if can_kb {
+                                if let Some(keyboard) = state.seat.get_keyboard() {
+                                    if keyboard.current_focus().as_ref() != Some(surf) {
+                                        let kb_serial = SERIAL_COUNTER.next_serial();
+                                        keyboard.set_focus(state, Some(surf.clone()), kb_serial);
+                                    }
+                                }
+                            }
+                        }
+
+                        touch.down(
+                            state,
+                            under_target,
+                            &smithay::input::touch::DownEvent {
+                                slot: event.slot(),
+                                location: point,
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::TouchMotion { event } => {
+                if let Some(touch) = state.seat.get_touch() {
+                    let output = state
+                        .primary_output()
+                        .or_else(|| state.space.outputs().next().cloned());
+                    if let Some(output) = output {
+                        let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                        let mut point = event.position_transformed(output_geo.size);
+                        point.x += output_geo.loc.x as f64;
+                        point.y += output_geo.loc.y as f64;
+                        let point = clamp_pointer_location(state, point);
+                        state.last_pointer_location = Some(point);
+                        let (under_target, _, _, _) = resolve_target_under(state, point);
+                        touch.motion(
+                            state,
+                            under_target,
+                            &smithay::input::touch::MotionEvent {
+                                slot: event.slot(),
+                                location: point,
+                                time: event.time_msec(),
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::TouchUp { event } => {
+                if let Some(touch) = state.seat.get_touch() {
+                    touch.up(
+                        state,
+                        &smithay::input::touch::UpEvent {
+                            slot: event.slot(),
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: event.time_msec(),
+                        },
+                    );
+                }
+            }
+            InputEvent::TouchFrame { .. } => {
+                if let Some(touch) = state.seat.get_touch() {
+                    touch.frame(state);
+                }
+            }
+            InputEvent::TouchCancel { .. } => {
+                if let Some(touch) = state.seat.get_touch() {
+                    touch.cancel(state);
+                }
+            }
             _ => {}
         }
     }).map_err(|e| anyhow::anyhow!("Error al registrar libinput event source: {e:?}"))?;
@@ -3837,7 +3990,8 @@ pub fn run_drm() -> Result<()> {
             || state.theme_transition_started_at.is_some()
             || state.pending_theme_transition_capture.is_some()
             || state.workspace_transition.is_some()
-            || state.pending_workspace_switch.is_some();
+            || state.pending_workspace_switch.is_some()
+            || state.shake_cursor.is_animating(Instant::now());
         let has_ready_output = if let Ok(mut surfs) = shared_surfaces.lock() {
             surfs.iter_mut().any(|s| {
                 s.recover_expired_flip();
@@ -3868,6 +4022,13 @@ pub fn run_drm() -> Result<()> {
         let _ = display.flush_clients();
 
         state.process_ipc_messages();
+        state.tick_pending_hot_corner();
+        let shake_frame_now = Instant::now();
+        state.shake_cursor.prune_if_finished(shake_frame_now);
+        let cursor_shake_scale = state.shake_cursor.scale_at(shake_frame_now);
+        let cursor_scale_milli = (cursor_shake_scale * 1000.0).round() as i32;
+        let effective_cursor_size = cursor_size as f64 * cursor_shake_scale;
+        let shake_cursor_animating = state.shake_cursor.is_animating(shake_frame_now);
         display.dispatch_clients(&mut state)?;
         if state.process_pending_dmabuf_imports(&mut renderer) {
             let _ = display.flush_clients();
@@ -3954,12 +4115,14 @@ pub fn run_drm() -> Result<()> {
                             != out_surface.last_output_commit_counter;
                     let quick_cursor_changed = quick_cursor_point
                         != out_surface.last_cursor_draw_point
-                        || state.cursor_status != out_surface.last_cursor_status;
+                        || state.cursor_status != out_surface.last_cursor_status
+                        || cursor_scale_milli != out_surface.last_cursor_scale_milli;
                     let quick_has_effects = out_surface.pending_damage_buffers > 0
                         || out_surface.full_damage_buffers > 0
                         || out_surface.dock_redraw_buffers > 0
                         || quick_has_commits
                         || quick_cursor_changed
+                        || shake_cursor_animating
                         || state.dnd_drop_hold.is_some()
                         || state.active_dnd_icon_draw_location().is_some()
                         || expose_animating
@@ -5270,7 +5433,8 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 let cursor_changed = cursor_draw_point != out_surface.last_cursor_draw_point
-                    || state.cursor_status != out_surface.last_cursor_status;
+                    || state.cursor_status != out_surface.last_cursor_status
+                    || cursor_scale_milli != out_surface.last_cursor_scale_milli;
                 if cursor_changed {
                     out_surface.pending_damage_buffers = out_surface.pending_damage_buffers.max(1);
                 }
@@ -5627,7 +5791,7 @@ pub fn run_drm() -> Result<()> {
                         let elem = &cursor_elems[0];
                         let view_dst = elem.view().dst;
                         if view_dst.w > 0 && view_dst.h > 0 {
-                            let target_logical_w = cursor_size as f64;
+                            let target_logical_w = effective_cursor_size;
                             let target_logical_h =
                                 target_logical_w * (view_dst.h as f64 / view_dst.w as f64);
                             let ratio_x = target_logical_w / view_dst.w as f64;
@@ -5658,7 +5822,7 @@ pub fn run_drm() -> Result<()> {
                             _ => cursor_texture.as_ref(),
                         };
                         if let Some(cur) = active_cursor {
-                            let scale_factor = (cursor_size as f64 * scale) / cur.size as f64;
+                            let scale_factor = (effective_cursor_size * scale) / cur.size as f64;
                             let cursor_w = (cur.width as f64 * scale_factor).round() as i32;
                             let cursor_h = (cur.height as f64 * scale_factor).round() as i32;
                             let hot_x = (cur.xhot as f64 * scale_factor).round() as i32;
@@ -7594,7 +7758,7 @@ pub fn run_drm() -> Result<()> {
                                     let view_dst = elem.view().dst;
                                     if view_dst.w > 0 && view_dst.h > 0 {
                                         rendered_surface_cursor = true;
-                                        let target_logical_w = cursor_size as f64;
+                                        let target_logical_w = effective_cursor_size;
                                         let target_logical_h = target_logical_w
                                             * (view_dst.h as f64 / view_dst.w as f64);
                                         let ratio_x = target_logical_w / view_dst.w as f64;
@@ -7655,7 +7819,7 @@ pub fn run_drm() -> Result<()> {
                                 };
                                 if let Some(cur) = active_cursor {
                                     let scale_factor =
-                                        (cursor_size as f64 * scale) / cur.size as f64;
+                                        (effective_cursor_size * scale) / cur.size as f64;
                                     let cursor_w = (cur.width as f64 * scale_factor).round() as i32;
                                     let cursor_h =
                                         (cur.height as f64 * scale_factor).round() as i32;
@@ -7900,6 +8064,7 @@ pub fn run_drm() -> Result<()> {
                     out_surface.last_output_commit_counter = current_output_commit_counter;
                     out_surface.last_cursor_draw_point = cursor_draw_point;
                     out_surface.last_cursor_status = state.cursor_status.clone();
+                    out_surface.last_cursor_scale_milli = cursor_scale_milli;
                     out_surface.last_expose_revision = state.expose.render_revision;
                     out_surface.last_workspace_revision = state.workspace_revision;
                     if out_surface.pending_damage_buffers > 0 {

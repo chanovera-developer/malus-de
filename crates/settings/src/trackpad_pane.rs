@@ -127,6 +127,7 @@ fn sync_gsettings_touchpad(cfg: &InputConfig) {
     let gs = gtk4::gio::Settings::new(schema);
     let _ = gs.set_double("speed", cfg.trackpad_speed.clamp(-1.0, 1.0));
     let _ = gs.set_boolean("tap-to-click", cfg.trackpad_tap_to_click);
+    let _ = gs.set_boolean("disable-while-typing", cfg.trackpad_disable_while_typing);
     let _ = gs.set_boolean("natural-scroll", cfg.natural_scrolling);
     let click_method = match cfg.trackpad_secondary_click.as_str() {
         "bottom_right" | "bottom_left" => "areas",
@@ -866,6 +867,16 @@ pub fn create_trackpad_pane(parent: &ApplicationWindow) -> (GtkBox, Rc<dyn Fn()>
         false,
     );
     point_card_box.append(&tap_row);
+    point_card_box.append(&make_row_divider());
+
+    // Desactivar al escribir (EN VIVO -> libinput DWT + GSettings)
+    let (dwt_row, dwt_sw) = make_switch_row(
+        "Desactivar al escribir",
+        Some("Ignora toques accidentales de la palma mientras escribes"),
+        input_cfg.borrow().trackpad_disable_while_typing,
+        false,
+    );
+    point_card_box.append(&dwt_row);
 
     let point_card = wrap_squircle_card(&point_card_box, WIFI_CARD_SQUIRCLE_RADIUS);
     tab_stack.add_named(&point_card, Some("point"));
@@ -1136,6 +1147,19 @@ pub fn create_trackpad_pane(parent: &ApplicationWindow) -> (GtkBox, Rc<dyn Fn()>
         let icfg_c = input_cfg.clone();
         let sync_c = syncing.clone();
         let apply_c = save_input_and_apply.clone();
+        dwt_sw.connect_state_set(move |_, active| {
+            if !sync_c.get() {
+                icfg_c.borrow_mut().trackpad_disable_while_typing = active;
+                apply_c();
+            }
+            glib::Propagation::Proceed
+        });
+    }
+
+    {
+        let icfg_c = input_cfg.clone();
+        let sync_c = syncing.clone();
+        let apply_c = save_input_and_apply.clone();
         nat_scroll_sw.connect_state_set(move |_, active| {
             if !sync_c.get() {
                 icfg_c.borrow_mut().natural_scrolling = active;
@@ -1340,6 +1364,7 @@ pub fn create_trackpad_pane(parent: &ApplicationWindow) -> (GtkBox, Rc<dyn Fn()>
         let lookup_d = lookup_dd.clone();
         let sec_d = sec_click_dd.clone();
         let tap_s = tap_sw.clone();
+        let dwt_s = dwt_sw.clone();
         let nat_s = nat_scroll_sw.clone();
         let zoom_s = pinch_zoom_sw.clone();
         let smart_s = smart_zoom_sw.clone();
@@ -1363,6 +1388,7 @@ pub fn create_trackpad_pane(parent: &ApplicationWindow) -> (GtkBox, Rc<dyn Fn()>
             lookup_d.set_selected((tp.lookup_data_detectors_idx as u32).min(2));
             sec_d.set_selected(secondary_click_to_idx(&ic.trackpad_secondary_click));
             tap_s.set_active(ic.trackpad_tap_to_click);
+            dwt_s.set_active(ic.trackpad_disable_while_typing);
             nat_s.set_active(ic.natural_scrolling);
             zoom_s.set_active(ic.trackpad_pinch_zoom);
             smart_s.set_active(tp.smart_zoom);

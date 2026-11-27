@@ -101,6 +101,8 @@ pub enum IpcMessage {
     ToggleMissionControl,
     /// Toggle Dispersión de Ventanas para Mostrar / Ocultar Escritorio (Super + D)
     ToggleShowDesktop,
+    /// Alternar Centro de Notificaciones / Centro de Control (esquina activa o atajo)
+    ToggleNotificationCenter,
     /// Invocación del Historial Visual del Portapapeles (Super + V)
     ToggleClipboardHistory,
     /// Invocación del Selector de Emojis y Símbolos (Super + .)

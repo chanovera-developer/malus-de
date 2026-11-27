@@ -258,6 +258,150 @@ pub struct PinchGestureState {
     pub triggered: bool,
 }
 
+/// Detector y controlador de animación para *Agitar el puntero para encontrarlo*.
+#[derive(Debug, Clone, Default)]
+pub struct ShakeCursorState {
+    samples: std::collections::VecDeque<(Instant, f64, f64)>,
+    grow_started_at: Option<Instant>,
+    grow_from_scale: f64,
+    last_shake_at: Option<Instant>,
+}
+
+impl ShakeCursorState {
+    const WINDOW: Duration = Duration::from_millis(420);
+    const MIN_AXIS_SEGMENT: f64 = 14.0;
+    const MIN_REVERSALS: u32 = 4;
+    const MIN_TRAVEL: f64 = 260.0;
+    const MAX_SCALE: f64 = 2.75;
+    const GROW_DURATION: Duration = Duration::from_millis(120);
+    const HOLD_DURATION: Duration = Duration::from_millis(650);
+    const SHRINK_DURATION: Duration = Duration::from_millis(260);
+    const MAX_SAMPLES: usize = 256;
+
+    fn count_axis_reversals<I: Iterator<Item = f64>>(deltas: I) -> u32 {
+        let mut confirmed_sign: i8 = 0;
+        let mut segment_accum = 0.0_f64;
+        let mut reversals = 0u32;
+        for d in deltas {
+            if d == 0.0 {
+                continue;
+            }
+            let sign: i8 = if d > 0.0 { 1 } else { -1 };
+            if confirmed_sign == 0 {
+                if (segment_accum >= 0.0 && sign > 0) || (segment_accum <= 0.0 && sign < 0) {
+                    segment_accum += d;
+                } else {
+                    segment_accum = d;
+                }
+                if segment_accum.abs() >= Self::MIN_AXIS_SEGMENT {
+                    confirmed_sign = sign;
+                    segment_accum = 0.0;
+                }
+            } else if sign == confirmed_sign {
+                segment_accum = 0.0;
+            } else {
+                segment_accum += d;
+                if segment_accum.abs() >= Self::MIN_AXIS_SEGMENT {
+                    reversals += 1;
+                    confirmed_sign = sign;
+                    segment_accum = 0.0;
+                }
+            }
+        }
+        reversals
+    }
+
+    pub fn record_motion(&mut self, dx: f64, dy: f64, now: Instant, enabled: bool) -> bool {
+        if !enabled {
+            self.samples.clear();
+            self.grow_started_at = None;
+            self.last_shake_at = None;
+            return false;
+        }
+        if dx.abs() < 0.01 && dy.abs() < 0.01 {
+            return false;
+        }
+
+        self.samples.push_back((now, dx, dy));
+        while let Some(&(ts, _, _)) = self.samples.front() {
+            if now.saturating_duration_since(ts) > Self::WINDOW
+                || self.samples.len() > Self::MAX_SAMPLES
+            {
+                self.samples.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        let rev_x = Self::count_axis_reversals(self.samples.iter().map(|s| s.1));
+        let rev_y = Self::count_axis_reversals(self.samples.iter().map(|s| s.2));
+        let total_travel: f64 = self.samples.iter().map(|s| s.1.hypot(s.2)).sum();
+
+        if rev_x.max(rev_y) >= Self::MIN_REVERSALS && total_travel >= Self::MIN_TRAVEL {
+            let current_scale = self.scale_at(now);
+            let needs_new_grow = match self.last_shake_at {
+                None => true,
+                Some(prev) => {
+                    now.saturating_duration_since(prev) > Self::HOLD_DURATION
+                        && current_scale < Self::MAX_SCALE - 0.01
+                }
+            };
+            if needs_new_grow {
+                self.grow_from_scale = current_scale;
+                self.grow_started_at = Some(now);
+            }
+            self.last_shake_at = Some(now);
+            return true;
+        }
+        false
+    }
+
+    pub fn scale_at(&self, now: Instant) -> f64 {
+        let Some(last_shake) = self.last_shake_at else {
+            return 1.0;
+        };
+        let grow_start = self.grow_started_at.unwrap_or(last_shake);
+        let grow_t = (now.saturating_duration_since(grow_start).as_secs_f64()
+            / Self::GROW_DURATION.as_secs_f64())
+        .clamp(0.0, 1.0);
+        let grow_ease = 1.0 - (1.0 - grow_t).powi(3);
+        let from_scale = self.grow_from_scale.max(1.0);
+        let grown = from_scale + (Self::MAX_SCALE - from_scale) * grow_ease;
+
+        let since_last = now.saturating_duration_since(last_shake);
+        if since_last <= Self::HOLD_DURATION {
+            return grown;
+        }
+        let shrink_elapsed = since_last.saturating_sub(Self::HOLD_DURATION);
+        if shrink_elapsed >= Self::SHRINK_DURATION {
+            return 1.0;
+        }
+        let t = (shrink_elapsed.as_secs_f64() / Self::SHRINK_DURATION.as_secs_f64())
+            .clamp(0.0, 1.0);
+        let shrink_ease = if t < 0.5 {
+            4.0 * t * t * t
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+        };
+        1.0 + (grown - 1.0) * (1.0 - shrink_ease)
+    }
+
+    pub fn is_animating(&self, now: Instant) -> bool {
+        let Some(last_shake) = self.last_shake_at else {
+            return false;
+        };
+        now.saturating_duration_since(last_shake) < Self::HOLD_DURATION + Self::SHRINK_DURATION
+    }
+
+    pub fn prune_if_finished(&mut self, now: Instant) {
+        if self.last_shake_at.is_some() && !self.is_animating(now) {
+            self.grow_started_at = None;
+            self.last_shake_at = None;
+            self.grow_from_scale = 1.0;
+        }
+    }
+}
+
 pub struct CachedDndIcon {
     pub buffer: MemoryRenderBuffer,
     pub rel_offset_logical: (f64, f64),
@@ -362,6 +506,7 @@ pub struct MalusState {
     pub workspace_revision: u64,
     pub swipe_gesture: SwipeGestureState,
     pub pinch_gesture: PinchGestureState,
+    pub shake_cursor: ShakeCursorState,
     pub surface_commit_counter: usize,
     pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
@@ -1908,6 +2053,7 @@ impl MalusState {
             workspace_revision: 0,
             swipe_gesture: SwipeGestureState::default(),
             pinch_gesture: PinchGestureState::default(),
+            shake_cursor: ShakeCursorState::default(),
             surface_commit_counter: 0,
             output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
@@ -5795,12 +5941,26 @@ impl MalusState {
                         HotCornerAction::LockScreen => {
                             self.lock_session();
                         }
-                        HotCornerAction::NotificationCenter | HotCornerAction::None => {}
+                        HotCornerAction::NotificationCenter => {
+                            self.ipc_broadcaster
+                                .broadcast(&IpcMessage::ToggleNotificationCenter);
+                        }
+                        HotCornerAction::None => {}
                     }
                 }
             }
             _ => {
                 self.hot_corner_hover = Some((tag, now, false));
+            }
+        }
+    }
+
+    /// Reevalúa una esquina activa pendiente de temporizador (`delay_ms`) aunque el puntero
+    /// permanezca inmóvil en la esquina.
+    pub fn tick_pending_hot_corner(&mut self) {
+        if matches!(self.hot_corner_hover, Some((_, _, false))) {
+            if let Some(point) = self.last_pointer_location {
+                self.check_hot_corners(point);
             }
         }
     }
@@ -10862,6 +11022,73 @@ mod tests {
             KeyboardInteractivity::None,
             "malus-notifications",
             true,
+        ));
+    }
+
+    #[test]
+    fn shake_cursor_triggers_on_rapid_reversals_and_decays_to_normal() {
+        use std::time::{Duration, Instant};
+
+        let mut shake = super::ShakeCursorState::default();
+        let t0 = Instant::now();
+        assert!((shake.scale_at(t0) - 1.0).abs() < 1e-6);
+        assert!(!shake.is_animating(t0));
+
+        // Movimiento suave en una sola dirección no debe activar el agrandamiento.
+        for i in 0..12 {
+            let t = t0 + Duration::from_millis(i * 15);
+            assert!(!shake.record_motion(35.0, 5.0, t, true));
+        }
+        assert!((shake.scale_at(t0 + Duration::from_millis(200)) - 1.0).abs() < 1e-6);
+
+        // Sacudida rápida horizontal con múltiples inversiones sí debe agrandar el cursor.
+        let t_shake = t0 + Duration::from_millis(800);
+        let mut triggered = false;
+        for i in 0..8 {
+            let dir = if i % 2 == 0 { 60.0 } else { -60.0 };
+            let t = t_shake + Duration::from_millis(i * 35);
+            if shake.record_motion(dir, 0.0, t, true) {
+                triggered = true;
+            }
+        }
+        assert!(triggered, "sacudida rápida debe activar shake_cursor");
+
+        let t_peak = t_shake + Duration::from_millis(400);
+        assert!(shake.is_animating(t_peak));
+        assert!(
+            shake.scale_at(t_peak) > 2.2,
+            "escala en pico debe superar 2.2x, obtenida={}",
+            shake.scale_at(t_peak)
+        );
+
+        // Tras hold + shrink debe volver exactamente a 1.0x y dejar de animar.
+        let t_done = t_shake + Duration::from_millis(1400);
+        assert!((shake.scale_at(t_done) - 1.0).abs() < 1e-6);
+        assert!(!shake.is_animating(t_done));
+        shake.prune_if_finished(t_done);
+        assert!(!shake.is_animating(t_done));
+
+        // Con enabled = false debe ignorar la sacudida.
+        let t_off = t_done + Duration::from_millis(500);
+        for i in 0..8 {
+            let dir = if i % 2 == 0 { 60.0 } else { -60.0 };
+            assert!(!shake.record_motion(dir, 0.0, t_off + Duration::from_millis(i * 30), false));
+        }
+        assert!((shake.scale_at(t_off + Duration::from_millis(250)) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn m17_input_config_dwt_and_notification_center_ipc_roundtrip() {
+        let cfg = malus_de_common::config::InputConfig::default();
+        assert!(cfg.trackpad_disable_while_typing);
+
+        let msg = malus_de_common::ipc::IpcMessage::ToggleNotificationCenter;
+        let json = serde_json::to_string(&msg).expect("serializar ToggleNotificationCenter");
+        let parsed: malus_de_common::ipc::IpcMessage =
+            serde_json::from_str(&json).expect("deserializar ToggleNotificationCenter");
+        assert!(matches!(
+            parsed,
+            malus_de_common::ipc::IpcMessage::ToggleNotificationCenter
         ));
     }
 }

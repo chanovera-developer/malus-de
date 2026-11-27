@@ -98,7 +98,7 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 | M14 | Optimización DRM | ✅ | Idle sleep, caché de fondos/miniaturas y ajustes de rendimiento ya aplicados. |
 | M15 | Spotlight reactivo | ✅ | Monitoreo reactivo nativo con `inotify` + `eventfd` en segundo plano para directorios `.desktop` (incluyendo Flatpak y carpetas creadas después del arranque) y archivos de usuario con *debounce* y apertura de Canopy sin I/O síncrono. |
 | M16 | Hotkeys (`XF86*`) y OSD | ✅ | Teclas de volumen, micrófono, brillo, luz de teclado, controles MPRIS2 y OSD flotante Liquid Glass squircle de 16 segmentos. |
-| M17 | Gestos, Trackpad y Hot Corners | 🟡 | Hot Corners (Mission Control, escritorio, bloqueo), gestos `swipe` 3+ dedos y *tap-to-click* activos; faltan `GesturePinch*`, scroll natural/aceleración/DWT en `libinput`, *shake cursor* y soporte táctil. |
+| M17 | Gestos, Trackpad y Hot Corners | ✅ | Gestos `GestureSwipe*`, `GesturePinch*` y `GestureHold*`, ajustes `libinput` en vivo (scroll natural, velocidad/aceleración, clic secundario y *Disable While Typing*), *shake cursor* animado, eventos táctiles `wl_touch` y Hot Corners completos (Mission Control, escritorio, bloqueo y Centro de Control). |
 | M18 | Energía, Batería e Inactividad | 🟡 | Indicador y panel de Batería activos; pendientes `ext-idle-notify`, inhibición, cierre de tapa y suspensión automática. |
 | M19 | Night Shift real y Display | 🟡 | Brillo real vía LUT gamma CRTC y panel Pantallas estilo Apple; pendientes Night Shift por horario, VRR y gestión de color. |
 | M20 | ScreenCast PipeWire | 📋 | Compartición de pantalla/ventana vía `xdg-desktop-portal` para navegadores y OBS. |

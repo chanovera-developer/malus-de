@@ -3649,6 +3649,9 @@ pub struct InputConfig {
     /// Presionar (tocar) con 1 dedo para hacer clic (`libinput` tap-to-click).
     #[serde(default = "default_true")]
     pub trackpad_tap_to_click: bool,
+    /// Desactivar el trackpad automáticamente mientras se escribe (`libinput` DWT).
+    #[serde(default = "default_true")]
+    pub trackpad_disable_while_typing: bool,
     /// Modo de clic secundario: `"off"`, `"two_fingers"`, `"bottom_right"`, `"bottom_left"`.
     #[serde(default = "default_trackpad_secondary_click")]
     pub trackpad_secondary_click: String,
@@ -3733,6 +3736,7 @@ impl Default for InputConfig {
             touchpad_enabled: true,
             trackpad_speed: default_trackpad_speed(),
             trackpad_tap_to_click: true,
+            trackpad_disable_while_typing: true,
             trackpad_secondary_click: default_trackpad_secondary_click(),
             trackpad_pinch_zoom: true,
             trackpad_rotate_gesture: true,
