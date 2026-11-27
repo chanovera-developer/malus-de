@@ -33,7 +33,7 @@ pub const BTN_CLOSE_X: f64 = 20.0;
 const BTN_MIN_X: f64 = 40.0;
 pub const BTN_MAX_X: f64 = 60.0;
 const BTN_RADIUS: f64 = 6.5;
-const BTN_HIT_RADIUS: f64 = 8.0;
+const BTN_HIT_RADIUS: f64 = 9.0;
 
 /// Devuelve las coordenadas X lógicas `(close_x, min_x, max_x)` de los tres botones semáforo:
 /// - Izquierda (`buttons_right = false`): cerrar (20), minimizar (40), maximizar (60).

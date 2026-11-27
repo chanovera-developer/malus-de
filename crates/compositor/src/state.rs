@@ -344,6 +344,8 @@ pub struct MalusState {
     pub dock_blur_headroom: i32,
     pub pending_screenshot_requests:
         std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
+    pub pending_window_screenshot_requests:
+        std::collections::VecDeque<(std::path::PathBuf, u64, Option<String>)>,
     pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
     pub theme_transition_started_at: Option<Instant>,
     pub pending_workspace_switch: Option<crate::workspace_transition::PendingWorkspaceSwitch>,
@@ -699,6 +701,7 @@ pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
 /// que requiere desenfoque completo en toda la tarjeta y no el recorte de barra lateral de Branches.
 pub fn is_quicklook_identifier(lower: &str) -> bool {
     lower.contains("branches.quicklook")
+        || lower.contains("screenshot-ui")
         || lower == "dev.malus.preview"
         || lower == "malus-de-preview"
 }
@@ -1351,6 +1354,86 @@ impl MalusState {
         Some(Rectangle::new((rel_x, rel_y).into(), (rel_w, rel_h).into()))
     }
 
+    pub fn window_id_under_point_in_output(
+        &self,
+        output_geo: Rectangle<i32, Logical>,
+        point: Point<f64, Logical>,
+    ) -> Option<u64> {
+        if output_geo.size.w <= 0 || output_geo.size.h <= 0 {
+            return None;
+        }
+        let win = self
+            .space
+            .elements()
+            .rev()
+            .find(|w| {
+                let Some(loc) = self.space.element_location(w) else {
+                    return false;
+                };
+                let geo = w.geometry();
+                let top_pad = if window_uses_ssd(w) {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let rect = Rectangle::new(
+                    (loc.x, loc.y - top_pad).into(),
+                    (geo.size.w, geo.size.h + top_pad).into(),
+                );
+                rect.to_f64().contains(point)
+            })
+            .cloned()
+            .or_else(|| self.get_active_window())?;
+        let surf = win.wl_surface()?;
+        self.window_ids.get(surf.as_ref()).copied()
+    }
+
+    pub fn window_by_id(&self, window_id: u64) -> Option<smithay::desktop::Window> {
+        self.space
+            .elements()
+            .find(|w| {
+                w.wl_surface()
+                    .and_then(|s| self.window_ids.get(s.as_ref()).copied())
+                    == Some(window_id)
+            })
+            .cloned()
+    }
+
+    pub fn start_ocr_screenshot(&mut self) {
+        if self.is_session_locked() {
+            return;
+        }
+        self.snap_layouts.close();
+        let pointer_loc = self.seat.get_pointer().map(|p| p.current_location());
+        let chosen_output = pointer_loc
+            .and_then(|pt| {
+                self.space
+                    .outputs()
+                    .find(|o| {
+                        self.space
+                            .output_geometry(o)
+                            .is_some_and(|g| g.to_f64().contains(pt))
+                    })
+                    .cloned()
+            })
+            .or_else(|| self.primary_output())
+            .or_else(|| self.space.outputs().next().cloned());
+
+        let (output_geo, output_name) = chosen_output
+            .map(|o| (self.space.output_geometry(&o).unwrap_or_default(), o.name()))
+            .unwrap_or_else(|| {
+                (
+                    Rectangle::new((0, 0).into(), (1920, 1080).into()),
+                    "default".to_string(),
+                )
+            });
+        self.screenshot_ui.open_with_mode(
+            output_geo,
+            output_name,
+            crate::screenshot_ui::ScreenshotUiMode::OcrArea,
+        );
+    }
+
     pub fn start_interactive_screenshot(&mut self) {
         if self.is_session_locked() {
             return;
@@ -1466,14 +1549,16 @@ impl MalusState {
             let options = self.screenshot_ui.options.clone();
             let mode = self.screenshot_ui.mode;
             let sel = self.screenshot_ui.clamped_selection(target_output_geo);
-            let win_rect = self.screenshot_ui.hovered_window_rect.or_else(|| {
-                let pt = self
-                    .seat
-                    .get_pointer()
-                    .map(|p| p.current_location())
-                    .unwrap_or_else(|| Point::from((0.0, 0.0)));
-                self.window_rect_under_point_in_output(target_output_geo, pt)
-            });
+            let pt = self
+                .seat
+                .get_pointer()
+                .map(|p| p.current_location())
+                .unwrap_or_else(|| Point::from((0.0, 0.0)));
+            let win_rect = self
+                .screenshot_ui
+                .hovered_window_rect
+                .or_else(|| self.window_rect_under_point_in_output(target_output_geo, pt));
+            let win_id = self.window_id_under_point_in_output(target_output_geo, pt);
             self.screenshot_ui.close();
 
             let sw = target_output_geo.size.w as f64;
@@ -1487,7 +1572,18 @@ impl MalusState {
                     .unwrap_or_else(|| std::path::PathBuf::from("malus-de-screenshot")),
             );
 
-            if mode == crate::screenshot_ui::ScreenshotUiMode::CaptureArea {
+            if mode == crate::screenshot_ui::ScreenshotUiMode::OcrArea {
+                let crop_arg = format!(
+                    "{},{},{},{},{},{}",
+                    sel.x.max(0.0),
+                    sel.y.max(0.0),
+                    sel.width.max(10.0),
+                    sel.height.max(10.0),
+                    sw,
+                    sh
+                );
+                cmd.args(["--mode", "ocr", "--crop", &crop_arg]);
+            } else if mode == crate::screenshot_ui::ScreenshotUiMode::CaptureArea {
                 let crop_arg = format!(
                     "{},{},{},{},{},{}",
                     sel.x.max(0.0),
@@ -1500,6 +1596,11 @@ impl MalusState {
                 cmd.args(["--mode", "area", "--crop", &crop_arg]);
             } else if mode == crate::screenshot_ui::ScreenshotUiMode::CaptureWindow {
                 cmd.args(["--mode", "window"]);
+                if options.transparent_window_bg {
+                    if let Some(wid) = win_id {
+                        cmd.args(["--window-id", &wid.to_string()]);
+                    }
+                }
                 if let Some(wr) = win_rect {
                     let crop_arg = format!(
                         "{},{},{},{},{},{}",
@@ -1790,6 +1891,7 @@ impl MalusState {
             toplevel_return_layer_focus: HashMap::new(),
             dock_blur_headroom,
             pending_screenshot_requests: std::collections::VecDeque::new(),
+            pending_window_screenshot_requests: std::collections::VecDeque::new(),
             pending_theme_transition_capture: None,
             theme_transition_started_at: None,
             pending_workspace_switch: None,
@@ -2410,6 +2512,7 @@ impl MalusState {
             self.ensure_window_below_topbar(&window);
 
             if is_already_focused {
+                self.sync_window_activation(window.wl_surface().as_deref());
                 tracing::debug!("La app solicitada ya tiene el foco; asegurando orden superior");
                 return true;
             }
@@ -2417,9 +2520,6 @@ impl MalusState {
             if let Some(surf) = window.wl_surface() {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                 self.set_keyboard_focus_with_sync(Some(surf.clone().into_owned()), serial);
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.send_configure();
-                }
                 self.notify_active_app(Some(&surf));
             }
             return true;
@@ -2500,6 +2600,24 @@ impl MalusState {
                     tracing::info!("Solicitud IPC de captura recibida para {output_name}");
                     self.pending_screenshot_requests
                         .push_back((std::path::PathBuf::from(destination), Some(output_name)));
+                }
+                IpcMessage::CaptureWindowScreenshot {
+                    destination,
+                    window_id,
+                    output_name,
+                } => {
+                    tracing::info!(
+                        "Solicitud IPC de captura aislada de ventana recibida (id={window_id})"
+                    );
+                    self.pending_window_screenshot_requests.push_back((
+                        std::path::PathBuf::from(destination),
+                        window_id,
+                        output_name,
+                    ));
+                }
+                IpcMessage::TriggerOcrCapture => {
+                    tracing::info!("📥 IPC TriggerOcrCapture recibido");
+                    self.start_ocr_screenshot();
                 }
                 IpcMessage::PrepareThemeTransition { request_id } => {
                     let origin = self
@@ -3096,37 +3214,56 @@ impl MalusState {
     /// Sincroniza el estado `Activated` de las ventanas en `Space`, difiriendo el `send_configure()`
     /// de activación cuando estamos en medio de `ButtonState::Pressed`.
     pub fn sync_window_activation(&mut self, focused: Option<&WlSurface>) {
-        let activated_flag =
-            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated;
         for win in self.space.elements() {
             let is_focused = focused
                 .map(|s| win.wl_surface().as_deref() == Some(s))
                 .unwrap_or(false);
+            // Nota: `Window::set_activated` (así como `Space::raise_element(_, true)` y
+            // `Space::map_element(_, _, true)`) mutan `pending_state.states` sin enviar configure.
+            // Usar `toplevel.has_pending_changes()` compara `server_pending` contra el último
+            // estado enviado (`current_server_state`), garantizando que nunca se pierda el
+            // `xdg_toplevel.configure` de activación o desactivación.
             win.set_activated(is_focused);
             if let Some(toplevel) = win.toplevel() {
-                let mut changed = false;
-                toplevel.with_pending_state(|state| {
-                    let was_activated = state.states.contains(activated_flag);
-                    if is_focused && !was_activated {
-                        state.states.set(activated_flag);
-                        changed = true;
-                    } else if !is_focused && was_activated {
-                        state.states.unset(activated_flag);
-                        changed = true;
-                    }
-                });
-                if changed {
+                let surf = toplevel.wl_surface().clone();
+                if !is_focused {
+                    self.pending_activation_configures.retain(|s| s != &surf);
+                }
+                if toplevel.has_pending_changes() {
                     if self.defer_activation_configure && is_focused {
-                        let surf = toplevel.wl_surface().clone();
                         if !self.pending_activation_configures.contains(&surf) {
                             self.pending_activation_configures.push(surf);
                         }
                     } else {
-                        toplevel.send_configure();
+                        let _ = toplevel.send_pending_configure();
                     }
                 }
             }
         }
+    }
+
+    /// Determina si una ventana debe renderizarse visualmente como activa (barra SSD y sombra),
+    /// basándose en el foco real de teclado (incluyendo popups hijos de esa ventana).
+    pub fn is_window_visually_active(
+        &self,
+        window: &smithay::desktop::Window,
+        kb_focus: Option<&WlSurface>,
+    ) -> bool {
+        let Some(main_surface) = window.wl_surface() else {
+            return false;
+        };
+        let Some(focused) = kb_focus else {
+            return false;
+        };
+        if focused == main_surface.as_ref() {
+            return true;
+        }
+        if let Some(popup) = self.popups.find_popup(focused) {
+            if let Ok(root) = find_popup_root_surface(&popup) {
+                return &root == main_surface.as_ref();
+            }
+        }
+        false
     }
 
     /// Cambia el foco de teclado y garantiza la actualización de `Activated` incluso cuando `focus` es `None`
@@ -3252,14 +3389,16 @@ impl MalusState {
             return;
         };
         let is_none = focus.is_none();
-        kb.set_focus(self, focus, serial);
+        kb.set_focus(self, focus.clone(), serial);
         if is_none {
             self.focus_cpu_priority.set_focused_pid(None);
             set_data_device_focus(&self.display_handle, &self.seat, None);
             set_primary_focus(&self.display_handle, &self.seat, None);
             self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
-            self.sync_window_activation(None);
         }
+        // Garantizar siempre la sincronización de `Activated` incluso si `kb.set_focus`
+        // no disparó `SeatHandler::focus_changed` (foco `None` o igual al foco previo).
+        self.sync_window_activation(focus.as_ref());
     }
 
     /// Envía los `xdg_toplevel.configure` de activación que fueron diferidos durante `ButtonState::Pressed`.
@@ -3279,7 +3418,7 @@ impl MalusState {
                 .find(|w| w.wl_surface().as_deref() == Some(&surf))
             {
                 if let Some(toplevel) = win.toplevel() {
-                    toplevel.send_configure();
+                    let _ = toplevel.send_pending_configure();
                 }
             }
         }
@@ -3476,14 +3615,9 @@ impl MalusState {
 
         if let Some(win) = target {
             self.space.raise_element(&win, true);
-            if let Some(toplevel) = win.toplevel() {
-                toplevel.send_configure();
-            }
             if let Some(surf) = win.wl_surface() {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                if let Some(kb) = self.seat.get_keyboard() {
-                    kb.set_focus(self, Some(surf.clone().into_owned()), serial);
-                }
+                self.set_keyboard_focus_with_sync(Some(surf.clone().into_owned()), serial);
                 self.notify_active_app(Some(&surf));
             }
         }
@@ -4412,13 +4546,8 @@ impl MalusState {
                 self.remove_minimized_thumbnail(window_id);
                 self.dock_slots.remove(&window_id);
                 self.space.map_element(win.clone(), loc, true);
-                if let Some(toplevel) = win.toplevel() {
-                    toplevel.send_configure();
-                }
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                if let Some(kb) = self.seat.get_keyboard() {
-                    kb.set_focus(self, Some(surf.clone()), serial);
-                }
+                self.set_keyboard_focus_with_sync(Some(surf.clone()), serial);
                 self.notify_active_app(Some(&surf));
                 self.notify_running_apps();
                 self.notify_minimized_windows();
@@ -6136,25 +6265,39 @@ impl MalusState {
             || self.popup_grab_active()
             || self.popup_under(point).is_some()
             || self.space.outputs().any(|output| {
+                let Some(output_geo) = self.space.output_geometry(output) else {
+                    return false;
+                };
+                if !output_geo.to_f64().contains(point) {
+                    return false;
+                }
+                let output_local_point = point - output_geo.loc.to_f64();
                 let layer_map = smithay::desktop::layer_map_for_output(output);
                 let under_layer = layer_map
-                    .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, point)
+                    .layer_under(
+                        smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                        output_local_point,
+                    )
                     .filter(|l| {
                         !(l.namespace() == "malus-app-switcher"
                             && !self.app_switcher_classic_active())
                     })
                     .or_else(|| {
                         if !self.has_fullscreen_window_on_output(output) {
-                            layer_map
-                                .layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
+                            layer_map.layer_under(
+                                smithay::wayland::shell::wlr_layer::Layer::Top,
+                                output_local_point,
+                            )
                         } else {
                             None
                         }
                     });
                 under_layer.is_some_and(|layer| {
                     layer_map.layer_geometry(layer).is_some_and(|geo| {
-                        let local_point = point - geo.loc.to_f64();
-                        if layer.namespace() == "malus-top-bar" && local_point.y >= 32.0 {
+                        let local_point = output_local_point - geo.loc.to_f64();
+                        if layer.namespace() == "malus-top-bar"
+                            && local_point.y >= (geo.size.h as f64).max(36.0)
+                        {
                             false
                         } else {
                             layer
@@ -6184,9 +6327,12 @@ impl MalusState {
                 self.ssd.update_hover(None, 0.0, 0.0, 0.0);
                 return;
             }
-            if let Some((_win, edge, _loc)) =
-                crate::grabs::find_window_resize_edge_under(&self.space, point, 8.0)
-            {
+            if let Some((_win, edge, _loc)) = crate::grabs::find_window_resize_edge_under(
+                &self.space,
+                point,
+                8.0,
+                self.ssd.buttons_right,
+            ) {
                 self.ssd.cursor_override = true;
                 self.ssd.update_hover(None, 0.0, 0.0, 0.0);
                 self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
@@ -6550,6 +6696,8 @@ impl MalusState {
                 if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
                     keyboard.set_focus(self, Some(surface.clone().into_owned()), serial);
                     self.notify_active_app(Some(&surface));
+                } else {
+                    self.sync_window_activation(Some(surface.as_ref()));
                 }
             }
         }
@@ -8071,8 +8219,19 @@ impl XdgShellHandler for MalusState {
             "🖱️ [XdgShell] move_request recibido del cliente: serial={:?}",
             serial
         );
-        let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
-        let pointer = seat.get_pointer().unwrap();
+        let Some(seat) = Seat::<Self>::from_resource(&seat) else {
+            return;
+        };
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
+
+        if !pointer.has_grab(serial) {
+            tracing::warn!(
+                "⚠️ [XdgShell] move_request rechazado: el puntero no tiene un grab con este serial"
+            );
+            return;
+        }
 
         let Some(start_data) = pointer.grab_start_data() else {
             tracing::warn!("⚠️ [XdgShell] move_request ignorado: no hay clic activo de ratón (evitando bloqueo del puntero)");
@@ -8097,6 +8256,7 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
+        self.flush_pending_activation_configures();
         self.ssd.grab_active = true;
         self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
@@ -8156,6 +8316,7 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
+        self.flush_pending_activation_configures();
         self.ssd.grab_active = true;
         self.ssd.cursor_override = true;
         self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
@@ -8519,7 +8680,7 @@ impl XdgShellHandler for MalusState {
         }
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        let (next_win, next_surface) = if destroyed_is_quicklook {
+        let (_next_win, next_surface) = if destroyed_is_quicklook {
             if let Some(layer_surf) = return_layer_focus {
                 (None, Some(layer_surf))
             } else {
@@ -8538,11 +8699,6 @@ impl XdgShellHandler for MalusState {
                 .or(return_layer_focus);
             (next_win, next_surface)
         };
-        if let Some(ref win) = next_win {
-            if let Some(toplevel) = win.toplevel() {
-                toplevel.send_configure();
-            }
-        }
         self.set_keyboard_focus_with_sync(next_surface, serial);
 
         if let Some(pointer) = self.seat.get_pointer() {
@@ -10624,5 +10780,14 @@ mod tests {
         assert!(state_src.contains("marker.0.store(false, Ordering::Release)"));
         assert!(state_src.contains("pending.size.w = 1"));
         assert!(state_src.contains("pending.size.h = 1"));
+    }
+
+    #[test]
+    fn activation_sync_uses_has_pending_changes_and_move_request_validates_serial() {
+        let state_src = include_str!("state.rs");
+        assert!(state_src.contains("if toplevel.has_pending_changes()"));
+        assert!(state_src.contains("toplevel.send_pending_configure()"));
+        assert!(state_src.contains("if !pointer.has_grab(serial)"));
+        assert!(state_src.contains("fn is_window_visually_active("));
     }
 }

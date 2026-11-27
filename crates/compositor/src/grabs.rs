@@ -355,6 +355,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
     fn unset(&mut self, data: &mut MalusState) {
         data.ssd.grab_active = false;
         data.ssd.cursor_override = false;
+        data.flush_pending_activation_configures();
     }
 }
 
@@ -820,6 +821,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
     fn unset(&mut self, data: &mut MalusState) {
         data.ssd.grab_active = false;
+        data.flush_pending_activation_configures();
     }
 }
 
@@ -876,12 +878,13 @@ pub fn preview_for_snap(
 
 /// Determina si un punto global de ratón cae dentro de la zona de borde perimetral de redimensión (8 px) de una ventana.
 /// NOTA IMPORTANTE: Para no interferir con aplicaciones GTK/Electron (que manejan su propia redimensión y controles),
-/// esta detección del lado del servidor se aplica EXCLUSIVAMENTE a Firefox.
+/// esta detección del lado del servidor se aplica EXCLUSIVAMENTE a Firefox y a ventanas con barra SSD.
 pub fn check_window_resize_edge(
     window: &Window,
     loc: Point<i32, Logical>,
     point: Point<f64, Logical>,
     thickness: f64,
+    buttons_right: bool,
 ) -> Option<ResizeEdge> {
     let uses_ssd = crate::state::window_uses_ssd(window);
     // Solo aplicar a Firefox y a ventanas con decoración SSD del compositor
@@ -938,12 +941,9 @@ pub fn check_window_resize_edge(
         return None;
     }
 
-    // Proteger zona de controles de ventana (semáforo macOS en esquina superior izquierda x in [8, 72])
-    // para garantizar que los clics en los botones de cerrar/minimizar/maximizar nunca se confundan con resize
-    if on_top && rel_x > thickness && rel_x < 72.0 && (!uses_ssd || rel_y > 2.0) {
-        return None;
-    }
-    if uses_ssd && on_left && rel_y >= 8.0 && rel_y <= 30.0 && rel_x >= 10.0 {
+    // Proteger zona de controles de ventana (semáforo macOS tanto a la izquierda como a la derecha)
+    // para garantizar que los clics en los botones de cerrar/minimizar/maximizar nunca se confundan con resize.
+    if is_in_traffic_light_resize_exclusion(rel_x, rel_y, win_w, buttons_right) {
         return None;
     }
 
@@ -990,12 +990,15 @@ pub fn find_window_resize_edge_under(
     space: &smithay::desktop::Space<Window>,
     point: Point<f64, Logical>,
     thickness: f64,
+    buttons_right: bool,
 ) -> Option<(Window, ResizeEdge, Point<i32, Logical>)> {
     for window in space.elements().rev() {
         let Some(loc) = space.element_location(window) else {
             continue;
         };
-        if let Some(edge) = check_window_resize_edge(window, loc, point, thickness) {
+        if let Some(edge) =
+            check_window_resize_edge(window, loc, point, thickness, buttons_right)
+        {
             return Some((window.clone(), edge, loc));
         }
         let geo = window.geometry();
@@ -1014,4 +1017,42 @@ pub fn find_window_resize_edge_under(
         }
     }
     None
+}
+
+/// Determina si `(rel_x, rel_y)` cae en la zona protegida de los botones semáforo macOS
+/// (izquierda o derecha) donde nunca debe activarse un borde de redimensión del servidor.
+pub fn is_in_traffic_light_resize_exclusion(
+    rel_x: f64,
+    rel_y: f64,
+    win_w: f64,
+    buttons_right: bool,
+) -> bool {
+    let in_traffic_x = if buttons_right {
+        rel_x >= (win_w - 76.0).max(0.0) && rel_x <= win_w - 4.0
+    } else {
+        rel_x >= 4.0 && rel_x <= 76.0
+    };
+    in_traffic_x && rel_y > 2.0 && rel_y <= 32.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn traffic_light_resize_exclusion_protects_left_and_right_layouts() {
+        // Izquierda: botones en x ≈ 20, 40, 60; y ≈ 19
+        assert!(is_in_traffic_light_resize_exclusion(20.0, 19.0, 800.0, false));
+        assert!(is_in_traffic_light_resize_exclusion(6.0, 19.0, 800.0, false));
+        assert!(!is_in_traffic_light_resize_exclusion(2.0, 19.0, 800.0, false));
+        assert!(!is_in_traffic_light_resize_exclusion(20.0, 1.5, 800.0, false));
+        assert!(!is_in_traffic_light_resize_exclusion(780.0, 19.0, 800.0, false));
+
+        // Derecha: botones en x ≈ 740, 760, 780; y ≈ 19
+        assert!(is_in_traffic_light_resize_exclusion(780.0, 19.0, 800.0, true));
+        assert!(is_in_traffic_light_resize_exclusion(794.0, 19.0, 800.0, true));
+        assert!(!is_in_traffic_light_resize_exclusion(798.0, 19.0, 800.0, true));
+        assert!(!is_in_traffic_light_resize_exclusion(780.0, 1.5, 800.0, true));
+        assert!(!is_in_traffic_light_resize_exclusion(20.0, 19.0, 800.0, true));
+    }
 }

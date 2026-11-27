@@ -60,6 +60,9 @@ struct Args {
     #[arg(long, help = "Nombre de salida/monitor específico a capturar")]
     output: Option<String>,
 
+    #[arg(long, help = "ID de ventana del compositor para captura aislada RGBA transparente")]
+    window_id: Option<u64>,
+
     #[arg(long, help = "Mostrar la tarjeta de vista previa para una grabación terminada")]
     show_recording: Option<PathBuf>,
 
@@ -234,14 +237,32 @@ fn main() -> Result<()> {
             if args.delay > 0 {
                 std::thread::sleep(Duration::from_secs(args.delay as u64));
             }
-            let source = request_compositor_capture(args.output.as_deref())?;
-            let final_source = if let Some(selection) = args.crop.as_deref().and_then(parse_crop_arg)
-            {
-                let cropped = crop_capture(&source, &selection);
-                remove_temporary_capture(&source);
-                cropped?
+            let final_source = if let Some(wid) = args.window_id {
+                match request_compositor_window_capture(wid, args.output.as_deref()) {
+                    Ok(isolated_path) => isolated_path,
+                    Err(err) => {
+                        tracing::warn!(
+                            "Captura aislada de ventana {wid} falló ({err:#}); usando recorte sobre pantalla"
+                        );
+                        let source = request_compositor_capture(args.output.as_deref())?;
+                        if let Some(selection) = args.crop.as_deref().and_then(parse_crop_arg) {
+                            let cropped = crop_capture(&source, &selection);
+                            remove_temporary_capture(&source);
+                            cropped?
+                        } else {
+                            source
+                        }
+                    }
+                }
             } else {
-                source
+                let source = request_compositor_capture(args.output.as_deref())?;
+                if let Some(selection) = args.crop.as_deref().and_then(parse_crop_arg) {
+                    let cropped = crop_capture(&source, &selection);
+                    remove_temporary_capture(&source);
+                    cropped?
+                } else {
+                    source
+                }
             };
             let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
             finish_capture_with_dir(
@@ -261,7 +282,9 @@ fn main() -> Result<()> {
             };
             let _video_path = recorder::start_screen_recording(None, &options)?;
         }
-        CaptureMode::Ocr => anyhow::bail!("El modo OCR aún no está implementado"),
+        CaptureMode::Ocr => {
+            run_ocr_capture(args.crop.as_deref(), args.output.as_deref(), args.delay)?;
+        }
     }
 
     Ok(())
@@ -377,6 +400,222 @@ fn play_capture_sound() {
             }
         }
     });
+}
+
+fn request_compositor_window_capture(
+    window_id: u64,
+    output_name: Option<&str>,
+) -> Result<PathBuf> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .context("XDG_RUNTIME_DIR no está definido")?;
+    let token = format!(
+        "malus-window-screenshot-{}-{}-{}",
+        window_id,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("El reloj del sistema está antes de UNIX_EPOCH")?
+            .as_nanos()
+    );
+    let destination = runtime_dir.join(format!("{token}.png"));
+    let message = IpcMessage::CaptureWindowScreenshot {
+        destination: destination.to_string_lossy().into_owned(),
+        window_id,
+        output_name: output_name.map(str::to_string),
+    };
+    send_ipc_message(&message).context("No se pudo enviar la solicitud al compositor Malus")?;
+
+    info!("Solicitud de captura aislada de ventana {window_id} enviada al compositor...");
+    let error_path = destination.with_extension("error");
+    let deadline = std::time::Instant::now() + CAPTURE_TIMEOUT;
+    while std::time::Instant::now() < deadline {
+        if destination.is_file() {
+            return Ok(destination);
+        }
+        if let Ok(error) = fs::read_to_string(&error_path) {
+            let _ = fs::remove_file(&error_path);
+            anyhow::bail!("El compositor no pudo capturar la ventana aislada: {error}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    anyhow::bail!(
+        "El compositor no respondió a la captura de ventana en {} segundos",
+        CAPTURE_TIMEOUT.as_secs()
+    );
+}
+
+fn select_ocr_language_from_list(langs_output: &str) -> Option<String> {
+    let langs: Vec<&str> = langs_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("List of available"))
+        .collect();
+    let has_spa = langs.iter().any(|&l| l == "spa");
+    let has_eng = langs.iter().any(|&l| l == "eng");
+    match (has_spa, has_eng) {
+        (true, true) => Some("spa+eng".to_string()),
+        (true, false) => Some("spa".to_string()),
+        (false, true) => Some("eng".to_string()),
+        (false, false) => langs.first().map(|s| (*s).to_string()),
+    }
+}
+
+fn format_ocr_preview(text: &str, max_chars: usize) -> String {
+    let normalized = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
+fn prepare_ocr_image(source_path: &std::path::Path) -> PathBuf {
+    let Ok(pixbuf) = gtk4::gdk_pixbuf::Pixbuf::from_file(source_path) else {
+        return source_path.to_path_buf();
+    };
+    let w = pixbuf.width();
+    let h = pixbuf.height();
+    // Escalar 2× recortes pequeños (< 900 px) mejora notablemente la precisión de Tesseract en texto UI
+    if w > 0 && h > 0 && w < 900 && h < 900 {
+        if let Some(scaled) = pixbuf.scale_simple(
+            w * 2,
+            h * 2,
+            gtk4::gdk_pixbuf::InterpType::Bilinear,
+        ) {
+            let upscaled_path = source_path.with_extension("ocr2x.png");
+            if scaled.savev(&upscaled_path, "png", &[]).is_ok() {
+                return upscaled_path;
+            }
+        }
+    }
+    source_path.to_path_buf()
+}
+
+fn copy_text_to_clipboard(text: &str) -> Result<()> {
+    let mut child = Command::new("wl-copy")
+        .args(["--type", "text/plain;charset=utf-8"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("No se pudo iniciar wl-copy; instala wl-clipboard para copiar texto OCR")?;
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("wl-copy no abrió la entrada de datos");
+    };
+    let write_res = stdin.write_all(text.as_bytes()).and_then(|_| stdin.flush());
+    drop(stdin);
+    if let Err(error) = write_res {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error).context("No se pudo enviar el texto OCR a wl-copy");
+    }
+    let status = child.wait().context("No se pudo esperar a wl-copy")?;
+    if !status.success() {
+        anyhow::bail!("wl-copy terminó con error: {status}");
+    }
+    Ok(())
+}
+
+fn run_ocr_capture(
+    crop_arg: Option<&str>,
+    output_name: Option<&str>,
+    delay_secs: u32,
+) -> Result<()> {
+    let selection = if let Some(sel) = crop_arg.and_then(parse_crop_arg) {
+        sel
+    } else {
+        select_area()?
+    };
+
+    if delay_secs > 0 {
+        std::thread::sleep(Duration::from_secs(delay_secs as u64));
+    }
+
+    let source = request_compositor_capture(output_name)?;
+    let cropped = match crop_capture(&source, &selection) {
+        Ok(path) => {
+            remove_temporary_capture(&source);
+            path
+        }
+        Err(err) => {
+            remove_temporary_capture(&source);
+            return Err(err);
+        }
+    };
+
+    let ocr_input = prepare_ocr_image(&cropped);
+
+    let langs_out = Command::new("tesseract")
+        .arg("--list-langs")
+        .output();
+
+    let lang_arg = match langs_out {
+        Ok(out) => {
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            select_ocr_language_from_list(&combined)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if ocr_input != cropped {
+                remove_temporary_capture(&ocr_input);
+            }
+            remove_temporary_capture(&cropped);
+            send_capture_notification(
+                "Motor OCR no instalado",
+                "Instala tesseract y tesseract-langpack-spa para extraer texto de pantalla.",
+            );
+            anyhow::bail!(
+                "tesseract no está instalado; instala 'tesseract' y 'tesseract-langpack-spa'"
+            );
+        }
+        Err(_) => None,
+    };
+
+    let mut cmd = Command::new("tesseract");
+    cmd.arg(&ocr_input).arg("stdout");
+    if let Some(ref lang) = lang_arg {
+        cmd.args(["-l", lang]);
+    }
+    cmd.args(["--psm", "6"]);
+
+    let output = cmd.output().context("Error al ejecutar tesseract para OCR")?;
+    if ocr_input != cropped {
+        remove_temporary_capture(&ocr_input);
+    }
+    remove_temporary_capture(&cropped);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        send_capture_notification("Error en OCR", stderr.trim());
+        anyhow::bail!("tesseract finalizó con error: {}", stderr.trim());
+    }
+
+    let extracted = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    play_capture_sound();
+
+    if extracted.is_empty() {
+        send_capture_notification(
+            "OCR sin texto detectado",
+            "No se encontró texto legible en el área seleccionada.",
+        );
+        info!("OCR completado sin texto legible.");
+        return Ok(());
+    }
+
+    copy_text_to_clipboard(&extracted)?;
+    let preview = format_ocr_preview(&extracted, 120);
+    info!("Texto OCR copiado al portapapeles ({} caracteres)", extracted.chars().count());
+    send_capture_notification("Texto copiado (OCR)", &preview);
+    Ok(())
 }
 
 fn request_compositor_capture(output_name: Option<&str>) -> Result<PathBuf> {
@@ -694,7 +933,10 @@ fn pixel_bounds(
 
 #[cfg(test)]
 mod tests {
-    use super::{crop_capture, pixel_bounds, AreaSelection, SelectionRect};
+    use super::{
+        crop_capture, format_ocr_preview, pixel_bounds, select_ocr_language_from_list,
+        AreaSelection, SelectionRect,
+    };
     use std::fs::{self, File, OpenOptions};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -738,6 +980,32 @@ mod tests {
         };
 
         assert!(pixel_bounds(selection, 200, 300).is_err());
+    }
+
+    #[test]
+    fn ocr_language_selection_prefers_spanish_plus_english() {
+        assert_eq!(
+            select_ocr_language_from_list("List of available languages in /usr/share/tessdata:\neng\nosd\nspa\n"),
+            Some("spa+eng".to_string())
+        );
+        assert_eq!(
+            select_ocr_language_from_list("List of available languages:\neng\n"),
+            Some("eng".to_string())
+        );
+        assert_eq!(
+            select_ocr_language_from_list("List of available languages:\nspa\n"),
+            Some("spa".to_string())
+        );
+        assert_eq!(select_ocr_language_from_list(""), None);
+    }
+
+    #[test]
+    fn ocr_preview_normalizes_whitespace_and_truncates() {
+        assert_eq!(
+            format_ocr_preview("  Hola\n   Malus   DE  ", 40),
+            "Hola Malus DE"
+        );
+        assert_eq!(format_ocr_preview("abcdefghij", 5), "abcde…");
     }
 
     #[test]

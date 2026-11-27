@@ -204,6 +204,56 @@ pub fn capture_pending_genie_snapshots(
     }
 }
 
+/// Captura una ventana individual de forma aislada en un FBO offscreen RGBA con fondo
+/// 100% transparente (`A = 0`) y esquinas squircle analíticas, escribiendo el PNG atómicamente.
+#[allow(clippy::too_many_arguments)]
+pub fn capture_isolated_window_to_png(
+    renderer: &mut GlesRenderer,
+    ssd: &mut crate::ssd::SsdManager,
+    squircle_shader: Option<&crate::window_corners::WindowSquircleShader>,
+    window: &Window,
+    window_loc_logical: Point<i32, Logical>,
+    output_origin_logical: Point<i32, Logical>,
+    screen_size: Size<i32, Physical>,
+    scale: f64,
+    win_phys_r: Option<i32>,
+    is_dark_theme: bool,
+    destination: &Path,
+) -> Result<()> {
+    validate_destination(destination)?;
+    let temporary = destination.with_extension("pending");
+    let capture_res = capture_window_offscreen(
+        renderer,
+        ssd,
+        squircle_shader,
+        None,
+        window,
+        window_loc_logical,
+        output_origin_logical,
+        screen_size,
+        scale,
+        win_phys_r,
+        is_dark_theme,
+        Some(&temporary),
+    );
+    if let Err(err) = capture_res {
+        let _ = fs::remove_file(&temporary);
+        return Err(err);
+    }
+    if let Err(error) = fs::hard_link(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error)
+            .with_context(|| format!("No se pudo finalizar {}", destination.display()));
+    }
+    if let Err(error) = fs::remove_file(&temporary) {
+        tracing::warn!(
+            "No se pudo limpiar el archivo temporal {}: {error}",
+            temporary.display()
+        );
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn capture_window_offscreen(
     renderer: &mut GlesRenderer,

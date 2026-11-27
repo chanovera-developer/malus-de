@@ -2098,9 +2098,12 @@ fn resolve_target_under(
         (Some((surf, focus_loc)), None, None, true)
     } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
         (Some((surf, (loc + sub_loc).to_f64())), None, None, true)
-    } else if let Some((win, _edge, loc)) =
-        crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
-    {
+    } else if let Some((win, _edge, loc)) = crate::grabs::find_window_resize_edge_under(
+        &state.space,
+        point,
+        8.0,
+        state.ssd.buttons_right,
+    ) {
         (None, None, Some((win, loc)), false)
     } else if let Some((win, loc, _, _, _, _)) = state.ssd_titlebar_under(point) {
         (None, None, Some((win, loc)), false)
@@ -2615,6 +2618,7 @@ pub fn run_drm() -> Result<()> {
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_r = sym == keysyms::KEY_r.into() || sym == keysyms::KEY_R.into();
+                                let is_t = sym == keysyms::KEY_t.into() || sym == keysyms::KEY_T.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
                                 let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
@@ -2638,6 +2642,12 @@ pub fn run_drm() -> Result<()> {
                                 }
 
                                 if sym == keysyms::KEY_Escape.into() && state.snap_layouts.handle_escape() {
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if has_super && has_shift && !has_alt && !has_ctrl && is_t {
+                                    info!("🔤 Atajo de Extractor OCR en pantalla detectado (Super+Shift+T)");
+                                    state.start_ocr_screenshot();
                                     return FilterResult::Intercept(());
                                 }
 
@@ -2967,19 +2977,11 @@ pub fn run_drm() -> Result<()> {
 
                     let (under_target, layer_info, regular_win, is_popup) = resolve_target_under(state, point);
 
-                    let motion_serial = SERIAL_COUNTER.next_serial();
-                    pointer.motion(
-                        state,
-                        under_target.clone(),
-                        &MotionEvent {
-                            location: point,
-                            serial: motion_serial,
-                            time: event.time_msec(),
-                        },
-                    );
-
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
+                        if !is_pressed {
+                            state.flush_pending_activation_configures();
+                        }
                         return;
                     }
                     if is_pressed {
@@ -3048,11 +3050,30 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
+                        // Liberar grabs residuales / popups ANTES de sincronizar el foco de puntero
+                        // para que `pointer.motion` no entregue el evento a un grab antiguo.
+                        let pre_grab_serial = SERIAL_COUNTER.next_serial();
                         state.prepare_pointer_press_grabs(
                             clicked_on_popup,
-                            btn_serial,
+                            pre_grab_serial,
                             event.time_msec(),
                         );
+
+                        let focus_changed =
+                            pointer.current_focus().as_ref() != under_target.as_ref().map(|(s, _)| s);
+                        let motion_serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            state,
+                            under_target.clone(),
+                            &MotionEvent {
+                                location: point,
+                                serial: motion_serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        if focus_changed {
+                            pointer.frame(state);
+                        }
 
                         let (has_super, has_alt) = state
                             .seat
@@ -3071,7 +3092,12 @@ pub fn run_drm() -> Result<()> {
                             && !state.popup_grab_active()
                         {
                             if let Some((resize_win, edge, win_loc)) =
-                                crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                                crate::grabs::find_window_resize_edge_under(
+                                    &state.space,
+                                    point,
+                                    8.0,
+                                    state.ssd.buttons_right,
+                                )
                             {
                                 let was_already_top = state
                                     .space
@@ -3085,12 +3111,15 @@ pub fn run_drm() -> Result<()> {
                                 if let Some(surface) = resize_win.wl_surface() {
                                     if let Some(keyboard) = state.seat.get_keyboard() {
                                         if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                            let kb_serial = SERIAL_COUNTER.next_serial();
                                             keyboard.set_focus(
                                                 state,
                                                 Some(surface.clone().into_owned()),
-                                                btn_serial,
+                                                kb_serial,
                                             );
                                             state.notify_active_app(Some(&surface));
+                                        } else {
+                                            state.sync_window_activation(Some(surface.as_ref()));
                                         }
                                     }
                                 }
@@ -3164,7 +3193,8 @@ pub fn run_drm() -> Result<()> {
 
                         if let Some((surf, ns, can_kb)) = layer_info {
                             if can_kb {
-                                state.set_keyboard_focus_with_sync(Some(surf), btn_serial);
+                                let kb_serial = SERIAL_COUNTER.next_serial();
+                                state.set_keyboard_focus_with_sync(Some(surf), kb_serial);
                                 if matches!(ns.as_str(), "malus-desktop-icons" | "malus-wallpaper")
                                 {
                                     state.notify_active_app(None);
@@ -3177,12 +3207,15 @@ pub fn run_drm() -> Result<()> {
                                     state.space.raise_element(&window, true);
                                 }
                                 if let Some(surface) = window.wl_surface() {
+                                    state.defer_activation_configure = true;
                                     if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
-                                        state.defer_activation_configure = true;
-                                        keyboard.set_focus(state, Some(surface.clone().into_owned()), btn_serial);
-                                        state.defer_activation_configure = false;
+                                        let kb_serial = SERIAL_COUNTER.next_serial();
+                                        keyboard.set_focus(state, Some(surface.clone().into_owned()), kb_serial);
                                         state.notify_active_app(Some(&surface));
+                                    } else {
+                                        state.sync_window_activation(Some(surface.as_ref()));
                                     }
+                                    state.defer_activation_configure = false;
                                 }
 
                                 if !has_super && !has_alt && event.button_code() == 0x110 {
@@ -3190,6 +3223,7 @@ pub fn run_drm() -> Result<()> {
                                 }
 
                                 if (has_super || has_alt) && event.button_code() == 0x110 {
+                                    state.flush_pending_activation_configures();
                                     let start_data = smithay::input::pointer::GrabStartData {
                                         focus: None,
                                         button: event.button_code(),
@@ -3214,6 +3248,7 @@ pub fn run_drm() -> Result<()> {
                                 }
 
                                 if (has_super || has_alt) && event.button_code() == 0x111 {
+                                    state.flush_pending_activation_configures();
                                     let initial_window_location = loc;
                                     let initial_window_size = window.geometry().size;
                                     let rel_x = point.x - loc.x as f64;
@@ -3252,6 +3287,16 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
                     } else {
+                        let motion_serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            state,
+                            under_target.clone(),
+                            &MotionEvent {
+                                location: point,
+                                serial: motion_serial,
+                                time: event.time_msec(),
+                            },
+                        );
                         if state.screenshot_ui.is_open() {
                             let output_geo = state.screenshot_ui_output_geometry();
                             match state.screenshot_ui.handle_pointer_button(
@@ -3262,9 +3307,11 @@ pub fn run_drm() -> Result<()> {
                             ) {
                                 crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
                                     state.execute_screenshot_ui_action();
+                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
@@ -3284,14 +3331,17 @@ pub fn run_drm() -> Result<()> {
                                 {
                                     state.update_spotlight_drag_dock_hover(point);
                                     state.handle_spotlight_pointer_release(spot_output_geo, outcome);
+                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                             }
                         }
                         if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
+                            state.flush_pending_activation_configures();
                             return;
                         }
                         if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
+                            state.flush_pending_activation_configures();
                             return;
                         }
                         if event.button_code() == 0x110 && !pointer.is_grabbed() {
@@ -3891,6 +3941,7 @@ pub fn run_drm() -> Result<()> {
                 // este monitor no necesita renderizar en este ciclo.
                 let has_pending_captures = !state.pending_black_holes.is_empty()
                     || !state.active_animations.is_empty()
+                    || !state.pending_window_screenshot_requests.is_empty()
                     || theme_capture_request.is_some()
                     || workspace_switch_pending;
                 if out_surface.is_flip_pending() && !has_pending_captures {
@@ -3933,6 +3984,7 @@ pub fn run_drm() -> Result<()> {
                         || state.theme_transition_started_at.is_some()
                         || state.workspace_transition.is_some()
                         || !state.pending_screenshot_requests.is_empty()
+                        || !state.pending_window_screenshot_requests.is_empty()
                         || state
                             .active_screen_recording
                             .as_ref()
@@ -3966,15 +4018,8 @@ pub fn run_drm() -> Result<()> {
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
                                 );
-                            let is_active = window
-                                .toplevel()
-                                .map(|t| {
-                                    t.current_state().states.contains(
-                                        smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated,
-                                    )
-                                })
-                                .unwrap_or(false)
-                                || kb_focus.as_ref() == Some(main_surface.as_ref());
+                            let is_active =
+                                state.is_window_visually_active(window, kb_focus.as_ref());
                             if out_surface.last_window_logical_geoms.get(&root_id)
                                 != Some(&(win_rect, is_active))
                             {
@@ -4447,10 +4492,9 @@ pub fn run_drm() -> Result<()> {
                                 })
                                 .unwrap_or((false, false));
 
-                            let is_active = window.toplevel().map(|t| {
-                                let states = &t.current_state().states;
-                                states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
-                            }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
+                            let kb_focus_now = state.seat.get_keyboard().and_then(|k| k.current_focus());
+                            let is_active =
+                                state.is_window_visually_active(window, kb_focus_now.as_ref());
 
                             let is_firefox = win_flags.is_firefox;
                             let is_translucent = win_flags.is_translucent;
@@ -4608,6 +4652,50 @@ pub fn run_drm() -> Result<()> {
                         is_dark_theme,
                         now,
                     );
+                }
+
+                // Captura aislada de ventana individual en PNG RGBA transparente (sin fondo ni ventanas traseras)
+                while let Some(req_idx) =
+                    state
+                        .pending_window_screenshot_requests
+                        .iter()
+                        .position(|(_, _, out_req)| {
+                            out_req
+                                .as_deref()
+                                .map_or(true, |name| name == out_surface.output.name())
+                        })
+                {
+                    if let Some((destination, window_id, _)) =
+                        state.pending_window_screenshot_requests.remove(req_idx)
+                    {
+                        if let Some(window) = state.window_by_id(window_id) {
+                            let win_loc =
+                                state.space.element_location(&window).unwrap_or_default();
+                            if let Err(error) = crate::capture::capture_isolated_window_to_png(
+                                &mut renderer,
+                                &mut state.ssd,
+                                window_squircle_shader.as_deref(),
+                                &window,
+                                win_loc,
+                                output_geo.loc,
+                                out_surface.size,
+                                scale,
+                                win_phys_r,
+                                is_dark_theme,
+                                &destination,
+                            ) {
+                                warn!(
+                                    "Error al capturar ventana aislada {window_id} en DRM: {error:#}"
+                                );
+                                crate::capture::write_capture_error(&destination, &error);
+                            }
+                        } else {
+                            let error = anyhow::anyhow!(
+                                "No se encontró la ventana {window_id} para captura aislada"
+                            );
+                            crate::capture::write_capture_error(&destination, &error);
+                        }
+                    }
                 }
 
                 let spotlight_frame = if state
@@ -7881,15 +7969,8 @@ pub fn run_drm() -> Result<()> {
                                     smithay::backend::renderer::element::Id::from_wayland_resource(
                                         main_surface.as_ref(),
                                     );
-                                let is_active = window
-                                    .toplevel()
-                                    .map(|t| {
-                                        t.current_state().states.contains(
-                                            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated,
-                                        )
-                                    })
-                                    .unwrap_or(false)
-                                    || kb_focus.as_ref() == Some(main_surface.as_ref());
+                                let is_active =
+                                    state.is_window_visually_active(window, kb_focus.as_ref());
                                 out_surface
                                     .last_window_logical_geoms
                                     .insert(root_id, (win_rect, is_active));
@@ -7957,13 +8038,8 @@ pub fn run_drm() -> Result<()> {
                     .space
                     .map_element(anim.window.clone(), anim.original_location, true);
                 state.space.raise_element(&anim.window, true);
-                if let Some(toplevel) = anim.window.toplevel() {
-                    toplevel.send_configure();
-                }
-                if let Some(kb) = state.seat.get_keyboard() {
-                    let serial = SERIAL_COUNTER.next_serial();
-                    kb.set_focus(&mut state, Some(anim.surface.clone()), serial);
-                }
+                let serial = SERIAL_COUNTER.next_serial();
+                state.set_keyboard_focus_with_sync(Some(anim.surface.clone()), serial);
                 state.notify_active_app(Some(&anim.surface));
                 state.notify_running_apps();
                 if state.auto_tiling_enabled {

@@ -141,6 +141,13 @@ pub enum IpcMessage {
         destination: String,
         output_name: String,
     },
+    /// Solicita al compositor capturar una ventana aislada en PNG RGBA con fondo transparente (sin fondo ni ventanas traseras).
+    CaptureWindowScreenshot {
+        destination: String,
+        window_id: u64,
+        #[serde(default)]
+        output_name: Option<String>,
+    },
     /// Invocación del Extractor de Texto en Pantalla OCR (Super + Shift + T)
     TriggerOcrCapture,
     /// Conmutar entre Modo Flotante y Modo Mosaico Automático (Super + Y)

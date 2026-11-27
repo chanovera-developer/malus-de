@@ -19,11 +19,12 @@ use std::time::Instant;
 use tracing::info;
 
 pub const SQUIRCLE_EXPONENT: f64 = 4.2;
-pub const TOOLBAR_WIDTH: f64 = 484.0;
+pub const TOOLBAR_WIDTH: f64 = 544.0;
 pub const TOOLBAR_HEIGHT: f64 = 44.0;
 pub const TOOLBAR_RADIUS: f64 = 22.0; // Cápsula squircle a altura de 44 px (44 / 2 = 22 px)
 pub const TOOLBAR_PADDING: f64 = 6.0;
 pub const ACTION_BTN_RADIUS: f64 = TOOLBAR_RADIUS - TOOLBAR_PADDING; // 16.0 px concéntrico al contorno de 22 px
+const TOOLBAR_GRIP_WIDTH: f64 = 20.0;
 const MIN_SELECTION_SIZE: f64 = 10.0;
 const MIN_RESIZE_HANDLE_SIZE: f64 = 24.0;
 
@@ -75,6 +76,7 @@ pub enum ScreenshotUiMode {
     CaptureFull,
     CaptureWindow,
     CaptureArea,
+    OcrArea,
     RecordFull,
     RecordArea,
 }
@@ -85,7 +87,11 @@ impl ScreenshotUiMode {
     }
 
     pub fn is_area(&self) -> bool {
-        matches!(self, Self::CaptureArea | Self::RecordArea)
+        matches!(self, Self::CaptureArea | Self::RecordArea | Self::OcrArea)
+    }
+
+    pub fn is_ocr(&self) -> bool {
+        matches!(self, Self::OcrArea)
     }
 }
 
@@ -104,6 +110,7 @@ pub struct UiOptions {
     pub remember_selection: bool,
     pub include_audio: bool,
     pub lossless: bool,
+    pub transparent_window_bg: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -118,6 +125,7 @@ pub struct SelectionArea {
 enum HandleType {
     None,
     MoveBox,
+    MoveToolbar,
     NorthWest,
     North,
     NorthEast,
@@ -141,12 +149,16 @@ pub struct ScreenshotUiState {
     pub recording_start: Option<Instant>,
     pub recording_dest: Option<PathBuf>,
 
+    // Posición arrastrable de la barra flotante (coordenadas lógicas relativas al monitor)
+    toolbar_pos: Option<(f64, f64)>,
+
     // Estado de interacción
     active_handle: HandleType,
     drag_start_pointer: (f64, f64),
     drag_start_area: SelectionArea,
-    hovered_item: Option<u8>, // 0: Cerrar, 1..5: Modos, 6: Opciones, 7: Acción, 8: Sin pérdidas
-    hovered_menu_item: Option<usize>, // 0..9 para el menú emergente
+    drag_start_toolbar: (f64, f64),
+    hovered_item: Option<u8>, // 0: Cerrar, 1..5: Modos, 6: Opciones, 7: Acción, 8: Sin pérdidas, 9: Agarre barra, 10: OCR
+    hovered_menu_item: Option<usize>, // 0..10 para el menú emergente
 
     // Buffers de renderizado del compositor
     render_buffer: Option<MemoryRenderBuffer>,
@@ -167,6 +179,7 @@ impl ScreenshotUiState {
                 remember_selection: true,
                 include_audio: false,
                 lossless: false,
+                transparent_window_bg: true,
             },
             show_options_menu: false,
             target_output: None,
@@ -180,6 +193,7 @@ impl ScreenshotUiState {
             is_recording: false,
             recording_start: None,
             recording_dest: None,
+            toolbar_pos: None,
             active_handle: HandleType::None,
             drag_start_pointer: (0.0, 0.0),
             drag_start_area: SelectionArea {
@@ -188,6 +202,7 @@ impl ScreenshotUiState {
                 width: 800.0,
                 height: 520.0,
             },
+            drag_start_toolbar: (0.0, 0.0),
             hovered_item: None,
             hovered_menu_item: None,
             render_buffer: None,
@@ -200,6 +215,74 @@ impl ScreenshotUiState {
 
     pub fn is_open(&self) -> bool {
         self.is_open
+    }
+
+    pub fn open_with_mode(
+        &mut self,
+        output_geo: Rectangle<i32, Logical>,
+        output_name: String,
+        mode: ScreenshotUiMode,
+    ) {
+        self.mode = mode;
+        self.open(output_geo, output_name);
+    }
+
+    pub fn toolbar_rect(&self, sw: f64, sh: f64) -> (f64, f64, f64, f64) {
+        let (def_x, def_y, w, h) = toolbar_geometry(sw, sh);
+        if let Some((px, py)) = self.toolbar_pos {
+            let max_x = (sw - w - 10.0).max(10.0);
+            let max_y = (sh - h - 10.0).max(40.0);
+            let min_y = 40.0_f64.min(max_y);
+            let cx = if px.is_finite() {
+                px.clamp(10.0, max_x).round()
+            } else {
+                def_x
+            };
+            let cy = if py.is_finite() {
+                py.clamp(min_y, max_y).round()
+            } else {
+                def_y
+            };
+            (cx, cy, w, h)
+        } else {
+            (def_x, def_y, w, h)
+        }
+    }
+
+    fn lossless_pill_rect(&self, sw: f64, sh: f64) -> (f64, f64, f64, f64) {
+        let (tb_x, tb_y, tb_w, tb_h) = self.toolbar_rect(sw, sh);
+        let pw = 128.0;
+        let ph = tb_h;
+        let right_x = tb_x + tb_w + 10.0;
+        if right_x + pw <= sw - 10.0 {
+            (right_x, tb_y, pw, ph)
+        } else if tb_x - pw - 10.0 >= 10.0 {
+            (tb_x - pw - 10.0, tb_y, pw, ph)
+        } else {
+            let cx = (tb_x + (tb_w - pw) * 0.5).clamp(10.0, (sw - pw - 10.0).max(10.0));
+            let above_y = tb_y - ph - 8.0;
+            let py = if above_y >= 40.0 {
+                above_y
+            } else {
+                (tb_y + tb_h + 8.0).min((sh - ph - 10.0).max(10.0))
+            };
+            (cx, py, pw, ph)
+        }
+    }
+
+    fn options_menu_rect(&self, sw: f64, sh: f64) -> (f64, f64, f64, f64) {
+        let (tb_x, tb_y, _, tb_h) = self.toolbar_rect(sw, sh);
+        let mw = 248.0;
+        let mh = 302.0;
+        let max_mx = (sw - mw - 10.0).max(10.0);
+        let mx = (tb_x + 326.0 + (108.0 - mw) * 0.5).clamp(10.0, max_mx);
+        let above_y = tb_y - mh - 8.0;
+        let my = if above_y >= 40.0 {
+            above_y
+        } else {
+            (tb_y + tb_h + 8.0).min((sh - mh - 10.0).max(10.0))
+        };
+        (mx, my, mw, mh)
     }
 
     pub fn open(&mut self, output_geo: Rectangle<i32, Logical>, output_name: String) {
@@ -288,7 +371,19 @@ impl ScreenshotUiState {
             return;
         }
 
-        // Si hay arrastre activo sobre el área de selección
+        // Si hay arrastre activo sobre la barra flotante o el área de selección
+        if self.active_handle == HandleType::MoveToolbar {
+            let offset_x = lx - self.drag_start_pointer.0;
+            let offset_y = ly - self.drag_start_pointer.1;
+            let max_x = (sw - TOOLBAR_WIDTH - 10.0).max(10.0);
+            let max_y = (sh - TOOLBAR_HEIGHT - 10.0).max(40.0);
+            let min_y = 40.0_f64.min(max_y);
+            let nx = (self.drag_start_toolbar.0 + offset_x).clamp(10.0, max_x);
+            let ny = (self.drag_start_toolbar.1 + offset_y).clamp(min_y, max_y);
+            self.toolbar_pos = Some((nx.round(), ny.round()));
+            return;
+        }
+
         if self.active_handle != HandleType::None {
             let offset_x = lx - self.drag_start_pointer.0;
             let offset_y = ly - self.drag_start_pointer.1;
@@ -360,7 +455,7 @@ impl ScreenshotUiState {
                     self.selection.x = new_x;
                     self.selection.width = (right - new_x).max(MIN_SELECTION_SIZE.min(sw));
                 }
-                HandleType::None => {}
+                HandleType::MoveToolbar | HandleType::None => {}
             }
             self.selection = clamp_selection_to_bounds(self.selection, sw, sh);
             return;
@@ -368,7 +463,7 @@ impl ScreenshotUiState {
 
         // Comprobar menú opciones si está abierto
         if self.show_options_menu {
-            let (menu_x, menu_y, menu_w, menu_h) = options_menu_geometry(sw, sh);
+            let (menu_x, menu_y, menu_w, menu_h) = self.options_menu_rect(sw, sh);
             if lx >= menu_x && lx <= menu_x + menu_w && ly >= menu_y && ly <= menu_y + menu_h {
                 self.hovered_menu_item = hit_test_options_menu(ly - menu_y);
                 self.hovered_item = Some(6);
@@ -378,33 +473,37 @@ impl ScreenshotUiState {
             }
         }
 
-        // Detección de elementos interactivos de la barra flotante (484 × 44, radio 22 px)
-        let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
+        // Detección de elementos interactivos de la barra flotante arrastrable (544 × 44, radio 22 px)
+        let (tb_x, tb_y, tb_w, tb_h) = self.toolbar_rect(sw, sh);
         if lx >= tb_x && lx <= tb_x + tb_w && ly >= tb_y && ly <= tb_y + tb_h {
             let rel_x = lx - tb_x;
-            if rel_x < 44.0 {
+            if rel_x < TOOLBAR_GRIP_WIDTH {
+                self.hovered_item = Some(9); // Agarre para mover la barra
+            } else if rel_x < 58.0 {
                 self.hovered_item = Some(0); // Cerrar
-            } else if rel_x < 88.0 {
+            } else if rel_x < 102.0 {
                 self.hovered_item = Some(1); // Capturar Pantalla
-            } else if rel_x < 132.0 {
+            } else if rel_x < 146.0 {
                 self.hovered_item = Some(2); // Capturar Ventana
-            } else if rel_x < 176.0 {
+            } else if rel_x < 190.0 {
                 self.hovered_item = Some(3); // Capturar Área
-            } else if rel_x < 222.0 {
+            } else if rel_x < 234.0 {
+                self.hovered_item = Some(10); // Extraer Texto (OCR)
+            } else if rel_x < 280.0 {
                 self.hovered_item = Some(4); // Grabar Pantalla
-            } else if rel_x < 268.0 {
+            } else if rel_x < 326.0 {
                 self.hovered_item = Some(5); // Grabar Área
-            } else if rel_x < 376.0 {
+            } else if rel_x < 434.0 {
                 self.hovered_item = Some(6); // Opciones ▾
             } else {
-                self.hovered_item = Some(7); // Acción (Capturar / Grabar)
+                self.hovered_item = Some(7); // Acción (Capturar / Grabar / Extraer)
             }
             return;
         }
 
         // Botón auxiliar flotante "Sin pérdidas" (solo visible en modos de grabación)
         if self.mode.is_video() {
-            let (lx_p, ly_p, lw_p, lh_p) = lossless_pill_geometry(sw, sh);
+            let (lx_p, ly_p, lw_p, lh_p) = self.lossless_pill_rect(sw, sh);
             if lx >= lx_p && lx <= lx_p + lw_p && ly >= ly_p && ly <= ly_p + lh_p {
                 self.hovered_item = Some(8);
                 return;
@@ -450,7 +549,7 @@ impl ScreenshotUiState {
 
         // 1. Clic en menú desplegable de opciones (si está abierto)
         if self.show_options_menu {
-            let (mx, my, mw, mh) = options_menu_geometry(sw, sh);
+            let (mx, my, mw, mh) = self.options_menu_rect(sw, sh);
             if lx >= mx && lx <= mx + mw && ly >= my && ly <= my + mh {
                 if let Some(item_idx) = hit_test_options_menu(ly - my) {
                     match item_idx {
@@ -464,6 +563,9 @@ impl ScreenshotUiState {
                         7 => self.options.remember_selection = !self.options.remember_selection,
                         8 => self.options.include_audio = !self.options.include_audio,
                         9 => self.options.lossless = !self.options.lossless,
+                        10 => {
+                            self.options.transparent_window_bg = !self.options.transparent_window_bg
+                        }
                         _ => {}
                     }
                 }
@@ -474,39 +576,51 @@ impl ScreenshotUiState {
             }
         }
 
-        // 2. Clic dentro de la barra de herramientas (484 × 44, radio 22 px)
-        let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
+        // 2. Clic dentro de la barra de herramientas arrastrable (544 × 44, radio 22 px)
+        let (tb_x, tb_y, tb_w, tb_h) = self.toolbar_rect(sw, sh);
         if lx >= tb_x && lx <= tb_x + tb_w && ly >= tb_y && ly <= tb_y + tb_h {
             let rel_x = lx - tb_x;
-            if rel_x < 44.0 {
+            if rel_x < TOOLBAR_GRIP_WIDTH {
+                // Iniciar arrastre libre de la barra flotante de captura/grabación
+                self.show_options_menu = false;
+                self.hovered_menu_item = None;
+                self.active_handle = HandleType::MoveToolbar;
+                self.drag_start_pointer = (lx.clamp(0.0, sw), ly.clamp(0.0, sh));
+                self.drag_start_toolbar = (tb_x, tb_y);
+                return ScreenshotPointerResult::Consumed;
+            } else if rel_x < 58.0 {
                 self.close();
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 88.0 {
+            } else if rel_x < 102.0 {
                 self.mode = ScreenshotUiMode::CaptureFull;
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 132.0 {
+            } else if rel_x < 146.0 {
                 self.mode = ScreenshotUiMode::CaptureWindow;
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 176.0 {
+            } else if rel_x < 190.0 {
                 self.mode = ScreenshotUiMode::CaptureArea;
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 222.0 {
+            } else if rel_x < 234.0 {
+                self.mode = ScreenshotUiMode::OcrArea;
+                self.show_options_menu = false;
+                return ScreenshotPointerResult::Consumed;
+            } else if rel_x < 280.0 {
                 self.mode = ScreenshotUiMode::RecordFull;
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 268.0 {
+            } else if rel_x < 326.0 {
                 self.mode = ScreenshotUiMode::RecordArea;
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::Consumed;
-            } else if rel_x < 376.0 {
+            } else if rel_x < 434.0 {
                 self.show_options_menu = !self.show_options_menu;
                 self.hovered_menu_item = None;
                 return ScreenshotPointerResult::Consumed;
             } else {
-                // Clic en botón "Capturar" / "Grabar"
+                // Clic en botón "Capturar" / "Grabar" / "Extraer"
                 self.show_options_menu = false;
                 return ScreenshotPointerResult::TriggerAction;
             }
@@ -514,7 +628,7 @@ impl ScreenshotUiState {
 
         // 2b. Clic en el botón flotante "Sin pérdidas" (solo en modos de grabación)
         if self.mode.is_video() {
-            let (lx_p, ly_p, lw_p, lh_p) = lossless_pill_geometry(sw, sh);
+            let (lx_p, ly_p, lw_p, lh_p) = self.lossless_pill_rect(sw, sh);
             if lx >= lx_p && lx <= lx_p + lw_p && ly >= ly_p && ly <= ly_p + lh_p {
                 self.options.lossless = !self.options.lossless;
                 return ScreenshotPointerResult::Consumed;
@@ -593,6 +707,21 @@ impl ScreenshotUiState {
             return true; // Dispara acción
         }
 
+        // Espacio alterna entre Capturar Área y Capturar Ventana aislada (igual que macOS)
+        if sym == keysyms::KEY_space.into() {
+            match self.mode {
+                ScreenshotUiMode::CaptureArea => {
+                    self.mode = ScreenshotUiMode::CaptureWindow;
+                    self.show_options_menu = false;
+                }
+                ScreenshotUiMode::CaptureWindow => {
+                    self.mode = ScreenshotUiMode::CaptureArea;
+                    self.show_options_menu = false;
+                }
+                _ => {}
+            }
+        }
+
         false
     }
 
@@ -640,6 +769,10 @@ impl ScreenshotUiState {
         mix(&mut sig, u64::from(self.options.remember_selection));
         mix(&mut sig, u64::from(self.options.include_audio));
         mix(&mut sig, u64::from(self.options.lossless));
+        mix(&mut sig, u64::from(self.options.transparent_window_bg));
+        let (tb_x, tb_y, _, _) = self.toolbar_rect(sw, sh);
+        mix(&mut sig, (tb_x * 2.0).round() as i64 as u64);
+        mix(&mut sig, (tb_y * 2.0).round() as i64 as u64);
         mix(&mut sig, (self.selection.x * 2.0).round() as i64 as u64);
         mix(&mut sig, (self.selection.y * 2.0).round() as i64 as u64);
         mix(&mut sig, (self.selection.width * 2.0).round() as i64 as u64);
@@ -779,7 +912,9 @@ impl ScreenshotUiState {
                     let _ = ctx.stroke();
                 }
             }
-            ScreenshotUiMode::CaptureArea | ScreenshotUiMode::RecordArea => {
+            ScreenshotUiMode::CaptureArea
+            | ScreenshotUiMode::RecordArea
+            | ScreenshotUiMode::OcrArea => {
                 // Fondo oscuro translúcido
                 ctx.set_source_rgba(0.0, 0.0, 0.0, 0.38);
                 let _ = ctx.paint();
@@ -800,9 +935,14 @@ impl ScreenshotUiState {
                 ctx.set_line_width(1.0);
                 let _ = ctx.stroke();
 
-                // Borde blanco nítido
+                // Borde blanco nítido (o acento en modo OCR)
                 ctx.rectangle(rx, ry, rw, rh);
-                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                if self.mode.is_ocr() {
+                    let (ar, ag, ab) = malus_de_common::config::load_accent_color();
+                    ctx.set_source_rgba(ar, ag, ab, 0.96);
+                } else {
+                    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                }
                 ctx.set_line_width(1.5);
                 let _ = ctx.stroke();
 
@@ -827,7 +967,11 @@ impl ScreenshotUiState {
                 }
 
                 // Etiqueta de dimensiones en píldora squircle
-                let badge_text = format!("{} × {}", rw.round() as i32, rh.round() as i32);
+                let badge_text = if self.mode.is_ocr() {
+                    format!("OCR · {} × {}", rw.round() as i32, rh.round() as i32)
+                } else {
+                    format!("{} × {}", rw.round() as i32, rh.round() as i32)
+                };
                 ctx.set_font_size(11.5);
                 if let Ok(ext) = ctx.text_extents(&badge_text) {
                     let pad_x = 8.0;
@@ -855,11 +999,11 @@ impl ScreenshotUiState {
     }
 
     fn draw_toolbar(&self, ctx: &Context, mask_ctx: &Context, sw: f64, sh: f64, is_dark: bool) {
-        let (x, y, w, h) = toolbar_geometry(sw, sh);
+        let (x, y, w, h) = self.toolbar_rect(sw, sh);
         let r = TOOLBAR_RADIUS;
         let cy = y + h * 0.5;
 
-        // Máscara para Dual-Kawase blur con geometría squircle exacta (border-radius 32 px)
+        // Máscara para Dual-Kawase blur con geometría squircle exacta
         path_squircle_rect(mask_ctx, x, y, w, h, r);
         mask_ctx.set_source_rgba(1.0, 1.0, 1.0, 1.0);
         let _ = mask_ctx.fill();
@@ -905,10 +1049,19 @@ impl ScreenshotUiState {
             [0.12, 0.12, 0.14]
         };
 
-        // Botón Cerrar (✕ dentro de círculo concéntrico al extremo izquierdo de 22 px)
+        // Agarre izquierdo para arrastrar la barra flotante (6 puntos sutiles)
+        draw_drag_grip(
+            ctx,
+            x + 12.0,
+            cy,
+            self.hovered_item == Some(9) || self.active_handle == HandleType::MoveToolbar,
+            fg,
+        );
+
+        // Botón Cerrar (✕)
         draw_close_button(
             ctx,
-            x + 22.0,
+            x + 39.0,
             cy,
             self.hovered_item == Some(0),
             fg,
@@ -916,45 +1069,56 @@ impl ScreenshotUiState {
         );
 
         // Separador 1
-        draw_v_sep(ctx, x + 44.0, y + 8.0, h - 16.0, is_dark);
+        draw_v_sep(ctx, x + 58.0, y + 8.0, h - 16.0, is_dark);
 
-        // Modos de Foto: Pantalla, Ventana, Área
+        // Modos de Foto y OCR: Pantalla, Ventana, Área, Texto (OCR)
         let btn1_act = self.mode == ScreenshotUiMode::CaptureFull;
         let btn2_act = self.mode == ScreenshotUiMode::CaptureWindow;
         let btn3_act = self.mode == ScreenshotUiMode::CaptureArea;
+        let btn_ocr_act = self.mode == ScreenshotUiMode::OcrArea;
 
         draw_mode_button_plate(
             ctx,
-            x + 66.0,
+            x + 80.0,
             y + TOOLBAR_PADDING,
             btn1_act,
             self.hovered_item == Some(1),
             is_dark,
         );
-        draw_monitor_icon(ctx, x + 66.0, cy, fg, false);
+        draw_monitor_icon(ctx, x + 80.0, cy, fg, false);
 
         draw_mode_button_plate(
             ctx,
-            x + 110.0,
+            x + 124.0,
             y + TOOLBAR_PADDING,
             btn2_act,
             self.hovered_item == Some(2),
             is_dark,
         );
-        draw_window_icon(ctx, x + 110.0, cy, fg);
+        draw_window_icon(ctx, x + 124.0, cy, fg);
 
         draw_mode_button_plate(
             ctx,
-            x + 154.0,
+            x + 168.0,
             y + TOOLBAR_PADDING,
             btn3_act,
             self.hovered_item == Some(3),
             is_dark,
         );
-        draw_marquee_icon(ctx, x + 154.0, cy, fg, false);
+        draw_marquee_icon(ctx, x + 168.0, cy, fg, false);
+
+        draw_mode_button_plate(
+            ctx,
+            x + 212.0,
+            y + TOOLBAR_PADDING,
+            btn_ocr_act,
+            self.hovered_item == Some(10),
+            is_dark,
+        );
+        draw_ocr_icon(ctx, x + 212.0, cy, fg);
 
         // Separador 2
-        draw_v_sep(ctx, x + 176.0, y + 8.0, h - 16.0, is_dark);
+        draw_v_sep(ctx, x + 234.0, y + 8.0, h - 16.0, is_dark);
 
         // Modos de Video: Grabar Pantalla, Grabar Área
         let btn4_act = self.mode == ScreenshotUiMode::RecordFull;
@@ -962,32 +1126,32 @@ impl ScreenshotUiState {
 
         draw_mode_button_plate(
             ctx,
-            x + 199.0,
+            x + 257.0,
             y + TOOLBAR_PADDING,
             btn4_act,
             self.hovered_item == Some(4),
             is_dark,
         );
-        draw_monitor_icon(ctx, x + 199.0, cy, fg, true);
+        draw_monitor_icon(ctx, x + 257.0, cy, fg, true);
 
         draw_mode_button_plate(
             ctx,
-            x + 245.0,
+            x + 303.0,
             y + TOOLBAR_PADDING,
             btn5_act,
             self.hovered_item == Some(5),
             is_dark,
         );
-        draw_marquee_icon(ctx, x + 245.0, cy, fg, true);
+        draw_marquee_icon(ctx, x + 303.0, cy, fg, true);
 
         // Separador 3
-        draw_v_sep(ctx, x + 268.0, y + 8.0, h - 16.0, is_dark);
+        draw_v_sep(ctx, x + 326.0, y + 8.0, h - 16.0, is_dark);
 
         // Botón Opciones ▾
         let opt_hov = self.hovered_item == Some(6);
         draw_options_button(
             ctx,
-            x + 274.0,
+            x + 332.0,
             y + TOOLBAR_PADDING,
             96.0,
             h - TOOLBAR_PADDING * 2.0,
@@ -998,16 +1162,21 @@ impl ScreenshotUiState {
         );
 
         // Separador 4
-        draw_v_sep(ctx, x + 376.0, y + 8.0, h - 16.0, is_dark);
+        draw_v_sep(ctx, x + 434.0, y + 8.0, h - 16.0, is_dark);
 
-        // Botón de Acción Principal ("Capturar" con color de énfasis / "Grabar")
-        // Radio concéntrico al borde externo de 22 px: 22 - 6 = 16 px.
+        // Botón de Acción Principal ("Capturar" / "Grabar" / "Extraer")
         let is_video = self.mode.is_video();
-        let act_label = if is_video { "Grabar" } else { "Capturar" };
+        let act_label = if is_video {
+            "Grabar"
+        } else if self.mode.is_ocr() {
+            "Extraer"
+        } else {
+            "Capturar"
+        };
         let act_hov = self.hovered_item == Some(7);
-        let act_x = x + 382.0;
+        let act_x = x + 440.0;
         let act_y = y + TOOLBAR_PADDING;
-        let act_w = w - 382.0 - TOOLBAR_PADDING;
+        let act_w = w - 440.0 - TOOLBAR_PADDING;
         let act_h = h - TOOLBAR_PADDING * 2.0;
         draw_action_button(
             ctx,
@@ -1029,7 +1198,7 @@ impl ScreenshotUiState {
         sh: f64,
         is_dark: bool,
     ) {
-        let (x, y, w, h) = options_menu_geometry(sw, sh);
+        let (x, y, w, h) = self.options_menu_rect(sw, sh);
         let r = 12.0;
 
         path_squircle_rect(mask_ctx, x, y, w, h, r);
@@ -1121,6 +1290,11 @@ impl ScreenshotUiState {
             (7, self.options.remember_selection, "Recordar selección"),
             (8, self.options.include_audio, "Grabar micrófono"),
             (9, self.options.lossless, "Video sin pérdidas"),
+            (
+                10,
+                self.options.transparent_window_bg,
+                "Fondo transparente (ventana)",
+            ),
         ];
         for (i, (item_idx, checked, label)) in opts.iter().enumerate() {
             let iy = y + 216.0 + i as f64 * 20.0;
@@ -1147,7 +1321,7 @@ impl ScreenshotUiState {
         sh: f64,
         is_dark: bool,
     ) {
-        let (x, y, w, h) = lossless_pill_geometry(sw, sh);
+        let (x, y, w, h) = self.lossless_pill_rect(sw, sh);
         let r = TOOLBAR_RADIUS;
         let is_active = self.options.lossless;
         let is_hover = self.hovered_item == Some(8);
@@ -1260,30 +1434,6 @@ fn toolbar_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
     (x, y, w, h)
 }
 
-fn lossless_pill_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
-    let (tb_x, tb_y, tb_w, tb_h) = toolbar_geometry(sw, sh);
-    let pw = 128.0;
-    let ph = tb_h;
-    let right_x = tb_x + tb_w + 10.0;
-    if right_x + pw <= sw - 10.0 {
-        (right_x, tb_y, pw, ph)
-    } else {
-        // En pantallas estrechas, situar centrada justo encima de la barra
-        let cx = ((sw - pw) * 0.5).clamp(10.0, (sw - pw - 10.0).max(10.0));
-        (cx, (tb_y - ph - 8.0).max(10.0), pw, ph)
-    }
-}
-
-fn options_menu_geometry(sw: f64, sh: f64) -> (f64, f64, f64, f64) {
-    let (tb_x, tb_y, _, _) = toolbar_geometry(sw, sh);
-    let mw = 224.0;
-    let mh = 282.0;
-    let max_mx = (sw - mw - 10.0).max(10.0);
-    let mx = (tb_x + 268.0 + (108.0 - mw) * 0.5).clamp(10.0, max_mx);
-    let my = tb_y - mh - 8.0;
-    (mx, my, mw, mh)
-}
-
 fn hit_test_options_menu(rel_y: f64) -> Option<usize> {
     if rel_y >= 24.0 && rel_y < 44.0 {
         Some(0) // Escritorio
@@ -1305,9 +1455,51 @@ fn hit_test_options_menu(rel_y: f64) -> Option<usize> {
         Some(8) // Micrófono
     } else if rel_y >= 256.0 && rel_y < 276.0 {
         Some(9) // Video sin pérdidas
+    } else if rel_y >= 276.0 && rel_y < 296.0 {
+        Some(10) // Fondo transparente en ventana aislada
     } else {
         None
     }
+}
+
+fn draw_drag_grip(ctx: &Context, cx: f64, cy: f64, is_active: bool, fg: [f64; 3]) {
+    let alpha = if is_active { 0.85 } else { 0.40 };
+    ctx.set_source_rgba(fg[0], fg[1], fg[2], alpha);
+    for col in [-2.2_f64, 2.2] {
+        for row in [-5.0_f64, 0.0, 5.0] {
+            ctx.arc(cx + col, cy + row, 1.15, 0.0, TAU);
+            let _ = ctx.fill();
+        }
+    }
+}
+
+fn draw_ocr_icon(ctx: &Context, cx: f64, cy: f64, fg: [f64; 3]) {
+    // Esquinas tipo visor Live Text + letra 'T' nítida al centro
+    let half = 7.5;
+    let leg = 3.2;
+    ctx.set_source_rgba(fg[0], fg[1], fg[2], 0.90);
+    ctx.set_line_width(1.4);
+    ctx.set_line_cap(cairo::LineCap::Round);
+    ctx.set_line_join(cairo::LineJoin::Round);
+
+    // 4 escuadras de esquina
+    let corners = [(-1.0_f64, -1.0_f64), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+    for (sx, sy) in corners {
+        let ex = cx + sx * half;
+        let ey = cy + sy * half;
+        ctx.move_to(ex - sx * leg, ey);
+        ctx.line_to(ex, ey);
+        ctx.line_to(ex, ey - sy * leg);
+        let _ = ctx.stroke();
+    }
+
+    // Glifo 'T' vectorial centrado
+    ctx.set_line_width(1.5);
+    ctx.move_to(cx - 3.2, cy - 3.0);
+    ctx.line_to(cx + 3.2, cy - 3.0);
+    ctx.move_to(cx, cy - 3.0);
+    ctx.line_to(cx, cy + 3.6);
+    let _ = ctx.stroke();
 }
 
 /// Dibuja la curva squircle (superelipse n=4.2) idéntica a la fórmula del Dock de Malus DE
@@ -1673,16 +1865,73 @@ mod tests {
     #[test]
     fn toolbar_height_matches_previous_44px_design_with_concentric_action_button() {
         assert_eq!(TOOLBAR_HEIGHT, 44.0);
-        assert_eq!(TOOLBAR_WIDTH, 484.0);
+        assert_eq!(TOOLBAR_WIDTH, 544.0);
         assert_eq!(TOOLBAR_RADIUS, 22.0);
         assert_eq!(ACTION_BTN_RADIUS, TOOLBAR_RADIUS - TOOLBAR_PADDING);
         assert_eq!(ACTION_BTN_RADIUS, 16.0);
         let (_, _, w, h) = toolbar_geometry(1920.0, 1080.0);
-        assert_eq!((w, h), (484.0, 44.0));
+        assert_eq!((w, h), (544.0, 44.0));
 
         let mut ui = ScreenshotUiState::new();
         ui.is_recording = true;
-        assert!(!ui.is_open(), "La grabación activa no debe bloquear el teclado ni el escritorio");
+        assert!(
+            !ui.is_open(),
+            "La grabación activa no debe bloquear el teclado ni el escritorio"
+        );
+    }
+
+    #[test]
+    fn toolbar_can_be_dragged_and_clamped_and_options_flips_when_near_top() {
+        let mut ui = ScreenshotUiState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        ui.open(output_geo, "DP-1".to_string());
+
+        let (orig_x, orig_y, _, orig_h) = ui.toolbar_rect(1920.0, 1080.0);
+        // Presionar el agarre izquierdo (rel_x = 10)
+        let grip = Point::from((orig_x + 10.0, orig_y + orig_h * 0.5));
+        let res = ui.handle_pointer_button(output_geo, grip, 0x110, ButtonState::Pressed);
+        assert_eq!(res, ScreenshotPointerResult::Consumed);
+
+        // Arrastrar hacia arriba a la esquina superior izquierda
+        ui.update_pointer_motion(output_geo, Point::from((120.0, 60.0)));
+        let (moved_x, moved_y, _, _) = ui.toolbar_rect(1920.0, 1080.0);
+        assert!(moved_x < orig_x);
+        assert!(moved_y < orig_y);
+        assert!(moved_y >= 40.0);
+
+        // Cuando la barra está pegada arriba, el menú de opciones debe abrirse debajo
+        let (_, menu_y, _, _) = ui.options_menu_rect(1920.0, 1080.0);
+        assert!(menu_y > moved_y);
+
+        // Soltar termina el arrastre
+        let rel = ui.handle_pointer_button(
+            output_geo,
+            Point::from((120.0, 60.0)),
+            0x110,
+            ButtonState::Released,
+        );
+        assert_eq!(rel, ScreenshotPointerResult::Consumed);
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+    }
+
+    #[test]
+    fn space_toggles_area_and_window_and_ocr_mode_renders() {
+        let mut ui = ScreenshotUiState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        ui.open_with_mode(output_geo, "DP-1".to_string(), ScreenshotUiMode::CaptureArea);
+        assert_eq!(ui.mode, ScreenshotUiMode::CaptureArea);
+
+        ui.handle_key_press(keysyms::KEY_space.into(), ModifiersState::default());
+        assert_eq!(ui.mode, ScreenshotUiMode::CaptureWindow);
+
+        ui.handle_key_press(keysyms::KEY_space.into(), ModifiersState::default());
+        assert_eq!(ui.mode, ScreenshotUiMode::CaptureArea);
+
+        ui.open_with_mode(output_geo, "DP-1".to_string(), ScreenshotUiMode::OcrArea);
+        assert!(ui.mode.is_ocr());
+        assert!(ui.mode.is_area());
+        assert!(ui.prepare_frame(output_geo, 1.0, true).is_some());
+        assert!(ui.prepare_frame(output_geo, 1.0, false).is_some());
     }
 
     #[test]
@@ -1810,7 +2059,7 @@ mod tests {
         ui.open(output_geo, "DP-1".to_string());
         assert!(!ui.options.lossless);
 
-        let (px, py, pw, ph) = lossless_pill_geometry(1920.0, 1080.0);
+        let (px, py, pw, ph) = ui.lossless_pill_rect(1920.0, 1080.0);
         let pill_center = Point::from((px + pw * 0.5, py + ph * 0.5));
 
         // En modo foto, el botón "Sin pérdidas" no debe activarse

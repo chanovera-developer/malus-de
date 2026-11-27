@@ -338,6 +338,7 @@ pub fn run_winit() -> Result<()> {
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_r = sym == keysyms::KEY_r.into() || sym == keysyms::KEY_R.into();
+                                let is_t = sym == keysyms::KEY_t.into() || sym == keysyms::KEY_T.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
                                 let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
@@ -360,6 +361,12 @@ pub fn run_winit() -> Result<()> {
                                 }
 
                                 if is_esc && state.snap_layouts.handle_escape() {
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if has_super && has_shift && !has_alt && !has_ctrl && is_t {
+                                    info!("🔤 Atajo de Extractor OCR en pantalla detectado (Super+Shift+T)");
+                                    state.start_ocr_screenshot();
                                     return FilterResult::Intercept(());
                                 }
 
@@ -622,7 +629,9 @@ pub fn run_winit() -> Result<()> {
                                     None
                                 };
                                 let hit = hit.or_else(|| {
-                                    if layer.namespace() == "malus-top-bar" && local_point.y >= 32.0 {
+                                    if layer.namespace() == "malus-top-bar"
+                                        && local_point.y >= (geo.size.h as f64).max(36.0)
+                                    {
                                         None
                                     } else {
                                         layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::TOPLEVEL)
@@ -663,8 +672,13 @@ pub fn run_winit() -> Result<()> {
                         Some((surf, focus_loc))
                     } else if let Some((_, loc, surf, sub_loc)) = state.popup_under(point) {
                         Some((surf, (loc + sub_loc).to_f64()))
-                    } else if crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
-                        .is_some()
+                    } else if crate::grabs::find_window_resize_edge_under(
+                        &state.space,
+                        point,
+                        8.0,
+                        state.ssd.buttons_right,
+                    )
+                    .is_some()
                     {
                         None
                     } else if state.ssd_titlebar_under(point).is_some() {
@@ -703,6 +717,9 @@ pub fn run_winit() -> Result<()> {
                     let point = pointer.current_location();
                     state.last_pointer_location = Some(point);
                     if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
+                        if !is_pressed {
+                            state.flush_pending_activation_configures();
+                        }
                         return;
                     }
 
@@ -728,7 +745,9 @@ pub fn run_winit() -> Result<()> {
                                     None
                                 };
                                 let hit = hit.or_else(|| {
-                                    if layer.namespace() == "malus-top-bar" && local_point.y >= 32.0 {
+                                    if layer.namespace() == "malus-top-bar"
+                                        && local_point.y >= (geo.size.h as f64).max(36.0)
+                                    {
                                         None
                                     } else {
                                         layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::TOPLEVEL)
@@ -799,7 +818,12 @@ pub fn run_winit() -> Result<()> {
                             true,
                         )
                     } else if let Some((win, _edge, loc)) =
-                        crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                        crate::grabs::find_window_resize_edge_under(
+                            &state.space,
+                            point,
+                            8.0,
+                            state.ssd.buttons_right,
+                        )
                     {
                         (None, None, Some((win, loc)), false)
                     } else if let Some((win, loc, _, _, _, _)) = state.ssd_titlebar_under(point) {
@@ -826,18 +850,6 @@ pub fn run_winit() -> Result<()> {
                     } else {
                         (None, None, None, false)
                     };
-
-                    // Sincronizar foco del puntero antes de procesar el botón para que el cliente reciba enter/button
-                    let motion_serial = SERIAL_COUNTER.next_serial();
-                    pointer.motion(
-                        &mut state,
-                        under_target.clone(),
-                        &MotionEvent {
-                            location: point,
-                            serial: motion_serial,
-                            time: event.time_msec(),
-                        },
-                    );
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
@@ -903,11 +915,29 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
+                        let pre_grab_serial = SERIAL_COUNTER.next_serial();
                         state.prepare_pointer_press_grabs(
                             clicked_on_popup,
-                            btn_serial,
+                            pre_grab_serial,
                             event.time_msec(),
                         );
+
+                        // Sincronizar foco del puntero después de liberar grabs residuales y antes de procesar el botón
+                        let focus_changed =
+                            pointer.current_focus().as_ref() != under_target.as_ref().map(|(s, _)| s);
+                        let motion_serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            &mut state,
+                            under_target.clone(),
+                            &MotionEvent {
+                                location: point,
+                                serial: motion_serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        if focus_changed {
+                            pointer.frame(&mut state);
+                        }
 
                         let has_super = keyboard.modifier_state().logo;
                         let has_alt = keyboard.modifier_state().alt;
@@ -920,7 +950,12 @@ pub fn run_winit() -> Result<()> {
                             && !state.popup_grab_active()
                         {
                             if let Some((resize_win, edge, win_loc)) =
-                                crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                                crate::grabs::find_window_resize_edge_under(
+                                    &state.space,
+                                    point,
+                                    8.0,
+                                    state.ssd.buttons_right,
+                                )
                             {
                                 let was_already_top = state
                                     .space
@@ -933,12 +968,15 @@ pub fn run_winit() -> Result<()> {
                                 }
                                 if let Some(surface) = resize_win.wl_surface() {
                                     if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                        let kb_serial = SERIAL_COUNTER.next_serial();
                                         keyboard.set_focus(
                                             &mut state,
                                             Some(surface.clone().into_owned()),
-                                            btn_serial,
+                                            kb_serial,
                                         );
                                         state.notify_active_app(Some(&surface));
+                                    } else {
+                                        state.sync_window_activation(Some(surface.as_ref()));
                                     }
                                 }
                                 let start_data = smithay::input::pointer::GrabStartData {
@@ -1012,7 +1050,8 @@ pub fn run_winit() -> Result<()> {
                         if let Some((surf, ns, can_kb)) = layer_info {
                             info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
                             if can_kb {
-                                state.set_keyboard_focus_with_sync(Some(surf), btn_serial);
+                                let kb_serial = SERIAL_COUNTER.next_serial();
+                                state.set_keyboard_focus_with_sync(Some(surf), kb_serial);
                                 if matches!(ns.as_str(), "malus-desktop-icons" | "malus-wallpaper")
                                 {
                                     state.notify_active_app(None);
@@ -1027,12 +1066,15 @@ pub fn run_winit() -> Result<()> {
                                 // cancele el GtkGestureClick de los botones de título (cerrar/minimizar/maximizar).
                             }
                             if let Some(surface) = window.wl_surface() {
+                                state.defer_activation_configure = true;
                                 if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
-                                    state.defer_activation_configure = true;
-                                    keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
-                                    state.defer_activation_configure = false;
+                                    let kb_serial = SERIAL_COUNTER.next_serial();
+                                    keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), kb_serial);
                                     state.notify_active_app(Some(&surface));
+                                } else {
+                                    state.sync_window_activation(Some(surface.as_ref()));
                                 }
+                                state.defer_activation_configure = false;
                             }
 
                             if !has_super && !has_alt && event.button_code() == 0x110 {
@@ -1040,6 +1082,7 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             if (has_super || has_alt) && event.button_code() == 0x110 {
+                                state.flush_pending_activation_configures();
                                 info!("🚀 Atajo Super/Alt + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
                                 let start_data = smithay::input::pointer::GrabStartData {
@@ -1067,6 +1110,7 @@ pub fn run_winit() -> Result<()> {
 
                             // Si Super o Alt está presionado y es clic derecho (0x111 = BTN_RIGHT): redimensionar ventana directamente desde cualquier punto
                             if (has_super || has_alt) && event.button_code() == 0x111 {
+                                state.flush_pending_activation_configures();
                                 let initial_window_location = loc;
                                 let initial_window_size = window.geometry().size;
 
@@ -1112,6 +1156,16 @@ pub fn run_winit() -> Result<()> {
                             state.notify_active_app(None);
                         }
                     } else {
+                        let motion_serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            &mut state,
+                            under_target.clone(),
+                            &MotionEvent {
+                                location: point,
+                                serial: motion_serial,
+                                time: event.time_msec(),
+                            },
+                        );
                         if state.screenshot_ui.is_open() {
                             let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                             match state.screenshot_ui.handle_pointer_button(
@@ -1122,9 +1176,11 @@ pub fn run_winit() -> Result<()> {
                             ) {
                                 crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
                                     state.execute_screenshot_ui_action();
+                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
@@ -1143,31 +1199,17 @@ pub fn run_winit() -> Result<()> {
                                 )
                             {
                                 state.update_spotlight_drag_dock_hover(point);
-                    let _ = state.handle_app_switcher_deck_pointer_motion(point);
-
-                    if state.handle_expose_pointer_motion(point) {
-                        let serial = SERIAL_COUNTER.next_serial();
-                        pointer.motion(
-                            &mut state,
-                            None,
-                            &MotionEvent {
-                                location: point,
-                                serial,
-                                time: event.time_msec(),
-                            },
-                        );
-                        pointer.frame(&mut state);
-                        return;
-                    }
-                    state.update_ssd_hover(point);
                                 state.handle_spotlight_pointer_release(output_geo, outcome);
+                                state.flush_pending_activation_configures();
                                 return;
                             }
                         }
                         if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
+                            state.flush_pending_activation_configures();
                             return;
                         }
                         if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
+                            state.flush_pending_activation_configures();
                             return;
                         }
                         if event.button_code() == 0x110 && !pointer.is_grabbed() {
@@ -1639,10 +1681,9 @@ pub fn run_winit() -> Result<()> {
                                 })
                                 .unwrap_or((false, false));
 
-                            let is_active = window.toplevel().map(|t| {
-                                let states = &t.current_state().states;
-                                states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
-                            }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
+                            let kb_focus_now = state.seat.get_keyboard().and_then(|k| k.current_focus());
+                            let is_active =
+                                state.is_window_visually_active(window, kb_focus_now.as_ref());
 
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
@@ -1781,6 +1822,36 @@ pub fn run_winit() -> Result<()> {
                     is_dark_theme,
                     now,
                 );
+                while let Some((destination, window_id, _)) =
+                    state.pending_window_screenshot_requests.pop_front()
+                {
+                    if let Some(window) = state.window_by_id(window_id) {
+                        let win_loc = state.space.element_location(&window).unwrap_or_default();
+                        if let Err(error) = crate::capture::capture_isolated_window_to_png(
+                            renderer,
+                            &mut state.ssd,
+                            window_squircle_shader.as_ref(),
+                            &window,
+                            win_loc,
+                            output_geo.loc,
+                            size,
+                            1.0,
+                            win_phys_r,
+                            is_dark_theme,
+                            &destination,
+                        ) {
+                            warn!(
+                                "Error al capturar ventana aislada {window_id} en Winit: {error:#}"
+                            );
+                            crate::capture::write_capture_error(&destination, &error);
+                        }
+                    } else {
+                        let error = anyhow::anyhow!(
+                            "No se encontró la ventana {window_id} para captura aislada"
+                        );
+                        crate::capture::write_capture_error(&destination, &error);
+                    }
+                }
                 let spotlight_frame = if state.spotlight.is_open() {
                     if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) = state
                         .spotlight
@@ -3236,13 +3307,8 @@ pub fn run_winit() -> Result<()> {
                                 true,
                             );
                             state.space.raise_element(&anim.window, true);
-                            if let Some(toplevel) = anim.window.toplevel() {
-                                toplevel.send_configure();
-                            }
-                            if let Some(kb) = state.seat.get_keyboard() {
-                                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                                kb.set_focus(&mut state, Some(anim.surface.clone()), serial);
-                            }
+                            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                            state.set_keyboard_focus_with_sync(Some(anim.surface.clone()), serial);
                             if state.auto_tiling_enabled {
                                 state.relayout_auto_tiling();
                             }
