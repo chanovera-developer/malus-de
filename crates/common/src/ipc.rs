@@ -103,6 +103,8 @@ pub enum IpcMessage {
     ToggleShowDesktop,
     /// Alternar Centro de Notificaciones / Centro de Control (esquina activa o atajo)
     ToggleNotificationCenter,
+    /// Notificación de bloqueo / desbloqueo de sesión (`ext-session-lock-v1`)
+    SessionLockChanged { locked: bool },
     /// Invocación del Historial Visual del Portapapeles (Super + V)
     ToggleClipboardHistory,
     /// Invocación del Selector de Emojis y Símbolos (Super + .)

@@ -330,8 +330,9 @@ Revisión de capacidades estándar de escritorio esperadas en el uso diario (esp
   - Soporte de métodos de entrada (`zwp-text-input-v3`, `zwp-input-method-v2` para IBus/Fcitx5) y teclado virtual (`zwp-virtual-keyboard-v1`).
   - Selector nativo de Emojis y Símbolos (`Cmd + Ctrl + Espacio`).
   - Protocolos `zwp-pointer-constraints-v1` y `zwp-relative-pointer-v1` para juegos 3D/FPS y clientes de escritorio remoto.
-* **Modo Concentración (DND) y Notificaciones Enriquecidas (M22):**
-  - Conectar el interruptor *Focus / No Molestar* del Centro de Control con `malus-de-notifications`, añadir horarios, silencio por aplicación y agrupación de notificaciones.
+* **Modo Concentración (DND) y Notificaciones Enriquecidas (M22 — Completado):**
+  - `FocusConfig` (`focus.toml`) con perfiles (*No molestar*, *Menos interrupciones* y personalizados), horarios automáticos, apps permitidas, excepción de urgentes y silenciado de globos del Dock; selector de perfiles en vivo desde el Centro de Control (`focus` subview), barra superior y Ajustes.
+  - `malus-de-notifications` enriquecido con agrupación por aplicación (pilas colapsables con tarjetas apiladas y `+N más`), botones de acción interactivos (`ActionInvoked`), miniaturas `image-data`/`image-path`, respeto de `expire_timeout`, privacidad `WhenUnlocked` enlazada con `SessionLockChanged`, e historial desplegable en el Centro de Notificaciones (clic en fecha/hora o esquina activa `NotificationCenter`).
 * **Paneles Faltantes de Ajustes, Polkit Nativo y Privacidad (M23):**
   - Añadir a `malus-de-settings` paneles para: Red/Wi-Fi, Bluetooth, Batería/Energía, Ratón y Trackpad, Notificaciones/Concentración, Idioma/Región/Fecha y Hora, Usuarios/Huella (`fprintd`) y Aplicaciones Predeterminadas.
   - Reemplazar `mate-polkit` por un diálogo Polkit nativo coherente con `malus-de-dialogs` y añadir indicadores de privacidad en barra superior cuando micrófono/cámara/pantalla estén activos.
@@ -415,7 +416,7 @@ Revisión de capacidades estándar de escritorio esperadas en el uso diario (esp
 | **M19** | Night Shift Real & Display | 📋 Planificado | Temperatura cálida real vía gamma LUT DRM o shader, programación por horario, VRR (*Adaptive Sync*) y gestión de color/HDR. |
 | **M20** | ScreenCast PipeWire (`Portal`) | 📋 Planificado | Flujo PipeWire vía `xdg-desktop-portal` para compartir pantalla o ventanas en navegadores y OBS. |
 | **M21** | IME, Selector de Emojis & Juegos | 📋 Planificado | Protocolos `text-input-v3`/`input-method-v2`/`virtual-keyboard`, selector de emojis (`Cmd+Ctrl+Espacio`) y `pointer-constraints`/`relative-pointer`. |
-| **M22** | Concentración (DND) & Avisos | 📋 Planificado | Integración real de Modo No Molestar entre Centro de Control y `malus-de-notifications`, reglas por app y agrupación. |
+| **M22** | Concentración (DND) & Avisos | ✅ Hecho | Enfoque real multiperfil con horarios, apps permitidas y selector en Centro de Control/Barra; `malus-de-notifications` con agrupación por app (pilas colapsables), acciones interactivas, miniaturas `image-data`/`image-path`, `expire_timeout`, privacidad `WhenUnlocked` y Centro de Notificaciones desplegable. |
 | **M23** | Ajustes Completos & Seguridad | 📋 Planificado | Paneles de Red, Bluetooth, Energía, Trackpad, Región/Hora y Huella (`fprintd`); agente Polkit nativo e indicadores de cámara/micrófono. |
 | **M24** | Accesibilidad & Mezclador | 🟡 En Progreso | Mezclador PipeWire por app, enrutamiento, balance L/R, sonidos del sistema, panel de Accesibilidad, reducir transparencia real y Orca/`spd-say`; pendientes zoom GPU y reducir movimiento en compositor/shell. |
 | **M25** | Navegador Web Nativo (`crates/browser`) | 📋 Planificado | Navegador propio estilo Safari Tahoe en Rust + GTK4 + CEF (OSR) con `corner-shape: squircle` nativo, bloqueador `adblock-rust` (Brave Shields), H.264/AAC, Widevine L3 bajo demanda e integración completa con Dock, Top Bar y Notificaciones. |

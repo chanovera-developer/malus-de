@@ -171,15 +171,12 @@ fn active_focus_status_text() -> String {
     }
 }
 
-fn set_focus_active(active: bool) {
+fn set_focus_mode_active(mode_id: Option<&str>) {
     let mut focus_cfg = malus_de_common::config::FocusConfig::load();
-    focus_cfg.active_focus_id = if active {
-        Some("do-not-disturb".to_string())
-    } else {
-        None
-    };
+    focus_cfg.active_focus_id = mode_id.map(str::to_string);
     let _ = focus_cfg.save();
 
+    let active = focus_cfg.is_active_now();
     if let Some(settings) = notifications_gsettings() {
         let _ = settings.set_boolean("show-banners", !active);
     }
@@ -256,8 +253,8 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
     bat_box.append(&Separator::new(Orientation::Horizontal));
     bat_box.append(&bat_settings_btn);
 
-    // 2. Enfoque
-    let (focus_btn, focus_pop, focus_box) = make_extra_menu_button("Enfoque (No molestar)", 230);
+    // 2. Enfoque (selector dinámico de perfiles: No molestar, Menos interrupciones y personalizados)
+    let (focus_btn, focus_pop, focus_box) = make_extra_menu_button("Enfoque", 240);
     let focus_icon = Image::from_icon_name("weather-clear-night-symbolic");
     focus_btn.set_child(Some(&focus_icon));
     let focus_status_lbl = Label::builder()
@@ -265,10 +262,9 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         .css_classes(["cc-tile-title"])
         .xalign(0.0)
         .build();
-    let focus_toggle_btn = Button::builder()
-        .label("Activar / Desactivar No molestar")
-        .css_classes(["popover-menu-item"])
-        .has_frame(false)
+    let focus_modes_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
         .build();
     let focus_settings_btn = Button::builder()
         .label("Configuración de enfoque...")
@@ -284,7 +280,8 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
     }
     focus_box.append(&focus_status_lbl);
     focus_box.append(&Separator::new(Orientation::Horizontal));
-    focus_box.append(&focus_toggle_btn);
+    focus_box.append(&focus_modes_box);
+    focus_box.append(&Separator::new(Orientation::Horizontal));
     focus_box.append(&focus_settings_btn);
 
     // 3. Duplicar pantalla / Pantallas
@@ -566,6 +563,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         let bat_ico_c = bat_icon.clone();
         let bat_stat_c = bat_pop_status.clone();
         let focus_btn_c = focus_btn.clone();
+        let focus_ico_c = focus_icon.clone();
         let focus_stat_c = focus_status_lbl.clone();
         let mirror_btn_c = mirror_btn.clone();
         let mirror_info_c = mirror_info.clone();
@@ -599,7 +597,14 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
                 bat_btn_c.set_visible(false);
             }
 
-            let focused = is_focus_active();
+            let focus_cfg = malus_de_common::config::FocusConfig::load();
+            let active_mode = focus_cfg.active_mode_now();
+            let focused = active_mode.is_some() || is_focus_active();
+            focus_ico_c.set_icon_name(Some(
+                active_mode
+                    .map(|m| m.icon.as_str())
+                    .unwrap_or("weather-clear-night-symbolic"),
+            ));
             focus_stat_c.set_label(&active_focus_status_text());
             focus_btn_c.set_visible(cfg.focus && (cfg.focus_mode == 0 || (cfg.focus_mode == 1 && focused)));
 
@@ -664,11 +669,40 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
 
     {
         let rf = refresh_fn.clone();
-        let fp = focus_pop;
-        focus_toggle_btn.connect_clicked(move |_| {
-            set_focus_active(!is_focus_active());
-            fp.popdown();
-            rf();
+        let fp = focus_pop.clone();
+        let mb = focus_modes_box;
+        focus_pop.connect_show(move |_| {
+            while let Some(child) = mb.first_child() {
+                mb.remove(&child);
+            }
+            let focus_cfg = malus_de_common::config::FocusConfig::load();
+            let active_id = focus_cfg.active_mode_now().map(|m| m.id.clone());
+            for mode in focus_cfg.modes {
+                let is_active = active_id.as_deref() == Some(mode.id.as_str());
+                let label = if is_active {
+                    format!("✓ {}", mode.name)
+                } else {
+                    mode.name.clone()
+                };
+                let item_btn = Button::builder()
+                    .label(&label)
+                    .css_classes(["popover-menu-item"])
+                    .has_frame(false)
+                    .build();
+                let mode_id = mode.id.clone();
+                let fp_c = fp.clone();
+                let rf_c = rf.clone();
+                item_btn.connect_clicked(move |_| {
+                    if is_active {
+                        set_focus_mode_active(None);
+                    } else {
+                        set_focus_mode_active(Some(&mode_id));
+                    }
+                    fp_c.popdown();
+                    rf_c();
+                });
+                mb.append(&item_btn);
+            }
         });
     }
 

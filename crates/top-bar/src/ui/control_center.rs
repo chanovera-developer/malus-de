@@ -80,6 +80,17 @@ pub fn open_control_center_for_drag() {
     });
 }
 
+/// Alterna la visibilidad del Centro de Control (invocado por atajo o IPC).
+#[allow(dead_code)]
+pub fn toggle_control_center() {
+    CC_RUNTIME.with(|cell| {
+        if let Some(rt) = cell.borrow().as_ref() {
+            let next = !rt.window.is_visible();
+            rt.toggle_btn.set_active(next);
+        }
+    });
+}
+
 /// Cierra el Centro de Control cuando el usuario enfoca otra aplicación (salvo si está en modo edición o arrastrando).
 pub fn close_control_center_if_not_editing() {
     CC_RUNTIME.with(|cell| {
@@ -267,7 +278,8 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         "Escritorio y Finder (Clic: Mostrar escritorio · Clic derecho: Branches)",
     );
 
-    let (focus_btn, focus_icon_circle, focus_icon, focus_sub) = create_tahoe_focus_pill();
+    let (focus_btn, focus_icon_circle, focus_icon, focus_title, focus_sub) =
+        create_tahoe_focus_pill();
 
     let current_disp_cfg = malus_de_common::config::DisplaysConfig::load();
     let (display_inner, display_header, brightness_scale, disp_pct, disp_icon) =
@@ -406,6 +418,42 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
     let sound_card = wrap_subview(&sound_subview);
     stack.add_named(&sound_card, Some("sound"));
 
+    // 9. Estado visual del tile de Enfoque (compartido con la subvista selector de perfiles)
+    let update_focus_ui: Rc<dyn Fn()> = {
+        let btn_c = focus_btn.clone();
+        let circle_c = focus_icon_circle.clone();
+        let ico_c = focus_icon.clone();
+        let title_c = focus_title.clone();
+        let sub_c = focus_sub.clone();
+        Rc::new(move || {
+            let focus_cfg = malus_de_common::config::FocusConfig::load();
+            if let Some(mode) = focus_cfg.active_mode_now() {
+                btn_c.add_css_class("cc-tile-active");
+                circle_c.add_css_class("cc-focus-circle-active");
+                ico_c.set_icon_name(Some(&mode.icon));
+                title_c.set_label(&mode.name);
+                sub_c.set_label("Activado");
+            } else if is_focus_active() {
+                btn_c.add_css_class("cc-tile-active");
+                circle_c.add_css_class("cc-focus-circle-active");
+                ico_c.set_icon_name(Some("weather-clear-night-symbolic"));
+                title_c.set_label("No\nmolestar");
+                sub_c.set_label("Activado");
+            } else {
+                btn_c.remove_css_class("cc-tile-active");
+                circle_c.remove_css_class("cc-focus-circle-active");
+                ico_c.set_icon_name(Some("weather-clear-night-symbolic"));
+                title_c.set_label("Enfoque");
+                sub_c.set_label("Desactivado");
+            }
+        })
+    };
+
+    let (focus_subview, refresh_focus_subview) =
+        create_focus_subview(&stack, &cc_window, &update_focus_ui);
+    let focus_card = wrap_subview(&focus_subview);
+    stack.add_named(&focus_card, Some("focus"));
+
     cc_window.set_child(Some(&stack));
 
     // ==========================================
@@ -421,6 +469,7 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
             ("airdrop", airdrop_card.clone().upcast()),
             ("displays", displays_card.clone().upcast()),
             ("sound", sound_card.clone().upcast()),
+            ("focus", focus_card.clone().upcast()),
         ]);
 
         let compute_and_send = Rc::new(move || {
@@ -1113,29 +1162,25 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         desktop_btn.add_controller(rclick);
     }
 
-    // 9. No molestar / Enfoque
-    let update_focus_ui: Rc<dyn Fn()> = {
-        let btn_c = focus_btn.clone();
-        let circle_c = focus_icon_circle.clone();
-        let sub_c = focus_sub.clone();
-        let _ico_c = focus_icon;
-        Rc::new(move || {
-            let active = is_focus_active();
-            if active {
-                btn_c.add_css_class("cc-tile-active");
-                circle_c.add_css_class("cc-focus-circle-active");
-                sub_c.set_label("Activado");
-            } else {
-                btn_c.remove_css_class("cc-tile-active");
-                circle_c.remove_css_class("cc-focus-circle-active");
-                sub_c.set_label("Desactivado");
+    // 9. No molestar / Enfoque (clic abre selector de perfiles; clic derecho alterna rápido No molestar)
+    {
+        let st = stack.clone();
+        let rf = refresh_focus_subview.clone();
+        let em = edit_mode.clone();
+        focus_btn.connect_clicked(move |_| {
+            if em.get() {
+                return;
             }
-        })
-    };
+            rf();
+            st.set_visible_child_name("focus");
+        });
+    }
     {
         let uf = update_focus_ui.clone();
         let em = edit_mode.clone();
-        focus_btn.connect_clicked(move |_| {
+        let rclick = GestureClick::new();
+        rclick.set_button(3);
+        rclick.connect_released(move |_, _, _, _| {
             if em.get() {
                 return;
             }
@@ -1143,6 +1188,7 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
             uf();
             crate::ui::status_tray::refresh_tray_visibility();
         });
+        focus_btn.add_controller(rclick);
     }
 
     // 10. Pantalla (slider de brillo)
@@ -1411,15 +1457,12 @@ fn is_focus_active() -> bool {
     }
 }
 
-fn set_focus_active(active: bool) {
+fn set_focus_mode_active(mode_id: Option<&str>) {
     let mut focus_cfg = malus_de_common::config::FocusConfig::load();
-    focus_cfg.active_focus_id = if active {
-        Some("do-not-disturb".to_string())
-    } else {
-        None
-    };
+    focus_cfg.active_focus_id = mode_id.map(str::to_string);
     let _ = focus_cfg.save();
 
+    let active = focus_cfg.is_active_now();
     let val = if active { "false" } else { "true" };
     let _ = Command::new("gsettings")
         .args([
@@ -1429,6 +1472,10 @@ fn set_focus_active(active: bool) {
             val,
         ])
         .spawn();
+}
+
+fn set_focus_active(active: bool) {
+    set_focus_mode_active(if active { Some("do-not-disturb") } else { None });
 }
 
 /// Píldora 2×1 de conectividad (Wi-Fi, Bluetooth, AirDrop) con círculo blanco de icono + título + subtítulo.
@@ -1532,7 +1579,7 @@ fn create_tahoe_circle_control(icon_name: &str, tooltip: &str) -> (Button, Image
 }
 
 /// Tarjeta squircle 2×1 de No molestar / Enfoque con glifo simbólico uniforme (`18px`).
-fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label) {
+fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label, Label) {
     let btn = Button::builder()
         .css_classes(["cc-glass-pill", "cc-glass-focus-pill"])
         .has_frame(false)
@@ -1540,7 +1587,7 @@ fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label) {
         .height_request(70)
         .valign(Align::Fill)
         .halign(Align::Fill)
-        .tooltip_text("No molestar / Enfoque")
+        .tooltip_text("Enfoque (Clic: elegir perfil · Clic derecho: alternar No molestar)")
         .build();
 
     let row = GtkBox::builder()
@@ -1577,9 +1624,10 @@ fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label) {
         .build();
 
     let title_lbl = Label::builder()
-        .label("No\nmolestar")
+        .label("Enfoque")
         .css_classes(["cc-glass-title"])
         .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
 
     let sub_lbl = Label::builder()
@@ -1592,12 +1640,187 @@ fn create_tahoe_focus_pill() -> (Button, GtkBox, Image, Label) {
     text_box.append(&title_lbl);
     text_box.append(&sub_lbl);
 
+    let chevron = Image::builder()
+        .icon_name("go-next-symbolic")
+        .pixel_size(14)
+        .opacity(0.65)
+        .valign(Align::Center)
+        .build();
+
     row.append(&icon_circle);
     row.append(&text_box);
+    row.append(&chevron);
     btn.set_child(Some(&row));
     apply_squircle_glass_fill_button(&btn, CC_TILE_SQUIRCLE_RADIUS, 10, 12);
 
-    (btn, icon_circle, icon, sub_lbl)
+    (btn, icon_circle, icon, title_lbl, sub_lbl)
+}
+
+fn create_focus_subview(
+    stack: &Stack,
+    popover: &Window,
+    update_focus_ui: &Rc<dyn Fn()>,
+) -> (GtkBox, Rc<dyn Fn()>) {
+    let view_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["cc-subview"])
+        .spacing(8)
+        .build();
+
+    let header = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-subview-header"])
+        .spacing(6)
+        .build();
+
+    let back_btn = Button::builder()
+        .css_classes(["cc-back-btn"])
+        .has_frame(false)
+        .tooltip_text("Volver")
+        .build();
+    back_btn.set_child(Some(&Image::from_icon_name("go-previous-symbolic")));
+    {
+        let stack_back = stack.clone();
+        back_btn.connect_clicked(move |_| {
+            stack_back.set_visible_child_name("main");
+        });
+    }
+
+    let title_lbl = Label::builder()
+        .label("Enfoque")
+        .css_classes(["cc-subview-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+
+    header.append(&back_btn);
+    header.append(&title_lbl);
+    view_box.append(&header);
+
+    let modes_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(6)
+        .build();
+    view_box.append(&modes_box);
+
+    view_box.append(&Separator::new(Orientation::Horizontal));
+
+    let settings_btn = Button::builder()
+        .label("Configuración de enfoque...")
+        .css_classes(["cc-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .build();
+    {
+        let pop_c = popover.clone();
+        settings_btn.connect_clicked(move |_| {
+            pop_c.set_visible(false);
+            let mut cmd = Command::new("malus-de-settings");
+            cmd.args(["--panel", "focus"]);
+            malus_de_common::config::set_cursor_environment(&mut cmd);
+            let _ = cmd.spawn();
+        });
+    }
+    view_box.append(&settings_btn);
+
+    let refresh_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let refresh: Rc<dyn Fn()> = {
+        let mb = modes_box;
+        let uf = update_focus_ui.clone();
+        let slot_c = refresh_slot.clone();
+        Rc::new(move || {
+            while let Some(child) = mb.first_child() {
+                mb.remove(&child);
+            }
+            let focus_cfg = malus_de_common::config::FocusConfig::load();
+            let active_id = focus_cfg.active_mode_now().map(|m| m.id.clone());
+
+            for mode in focus_cfg.modes {
+                let is_active = active_id.as_deref() == Some(mode.id.as_str());
+                let subtitle = if is_active {
+                    "Activado · Clic para desactivar".to_string()
+                } else if mode.schedule.enabled {
+                    format!("Horario {}", mode.schedule.summary_label())
+                } else if mode.allow_urgent {
+                    "Permite notificaciones urgentes".to_string()
+                } else {
+                    "Silencia todas las alertas".to_string()
+                };
+
+                let row_btn = Button::builder()
+                    .css_classes(if is_active {
+                        vec!["cc-list-row", "cc-list-row-active"]
+                    } else {
+                        vec!["cc-list-row"]
+                    })
+                    .has_frame(false)
+                    .halign(Align::Fill)
+                    .build();
+
+                let hbox = GtkBox::builder()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(10)
+                    .build();
+                let ico = Image::builder()
+                    .icon_name(&mode.icon)
+                    .pixel_size(18)
+                    .valign(Align::Center)
+                    .build();
+                let tcol = GtkBox::builder()
+                    .orientation(Orientation::Vertical)
+                    .spacing(1)
+                    .hexpand(true)
+                    .build();
+                tcol.append(
+                    &Label::builder()
+                        .label(&mode.name)
+                        .css_classes(["cc-item-title"])
+                        .xalign(0.0)
+                        .build(),
+                );
+                tcol.append(
+                    &Label::builder()
+                        .label(&subtitle)
+                        .css_classes(["cc-item-subtitle"])
+                        .xalign(0.0)
+                        .build(),
+                );
+                hbox.append(&ico);
+                hbox.append(&tcol);
+
+                if is_active {
+                    hbox.append(
+                        &Image::builder()
+                            .icon_name("object-select-symbolic")
+                            .pixel_size(15)
+                            .valign(Align::Center)
+                            .build(),
+                    );
+                }
+
+                row_btn.set_child(Some(&hbox));
+                let mode_id = mode.id.clone();
+                let uf_c = uf.clone();
+                let slot_click = slot_c.clone();
+                row_btn.connect_clicked(move |_| {
+                    if is_active {
+                        set_focus_mode_active(None);
+                    } else {
+                        set_focus_mode_active(Some(&mode_id));
+                    }
+                    uf_c();
+                    crate::ui::status_tray::refresh_tray_visibility();
+                    if let Some(ref rf) = *slot_click.borrow() {
+                        rf();
+                    }
+                });
+                mb.append(&row_btn);
+            }
+        })
+    };
+    *refresh_slot.borrow_mut() = Some(refresh.clone());
+
+    (view_box, refresh)
 }
 
 /// Tarjeta 2×2 de Ahora suena (MPRIS D-Bus) estilo macOS Tahoe.

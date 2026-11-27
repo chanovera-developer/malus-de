@@ -2959,6 +2959,13 @@ impl MalusState {
                     tracing::info!("📥 IPC ToggleShowDesktop recibido — alternando mostrar escritorio");
                     self.toggle_show_desktop();
                 }
+                IpcMessage::ToggleNotificationCenter => {
+                    tracing::info!(
+                        "📥 IPC ToggleNotificationCenter recibido — retransmitiendo a clientes shell"
+                    );
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ToggleNotificationCenter);
+                }
                 IpcMessage::ReloadDesktopDockConfig => {
                     tracing::info!("📥 IPC ReloadDesktopDockConfig recibido");
                     self.desktop_dock_cfg = malus_de_common::config::DesktopDockConfig::load();
@@ -9278,6 +9285,8 @@ impl SessionLockHandler for MalusState {
 
         confirmation.lock();
         self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::SessionLockChanged { locked: true });
         tracing::info!(
             "🔒 Sesión bloqueada mediante protocolo ext-session-lock-v1 (pid={:?})",
             client_pid
@@ -9292,6 +9301,8 @@ impl SessionLockHandler for MalusState {
         self.lockscreen_respawn_at = None;
         self.session_locked_flag.store(false, Ordering::SeqCst);
         self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::SessionLockChanged { locked: false });
 
         if let Some(top_win) = self.space.elements().last().cloned() {
             if let Some(surf) = top_win.wl_surface().map(|s| s.into_owned()) {

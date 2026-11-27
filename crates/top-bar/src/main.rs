@@ -457,6 +457,9 @@ fn build_ui(app: &Application) {
                 malus_de_common::ipc::IpcMessage::ScreenRecordingFinished { .. } => {
                     ui::recording_indicator::update_recording_status(false, 0);
                 }
+                malus_de_common::ipc::IpcMessage::ToggleNotificationCenter => {
+                    ui::control_center::close_control_center_if_not_editing();
+                }
                 _ => {}
             }
         }

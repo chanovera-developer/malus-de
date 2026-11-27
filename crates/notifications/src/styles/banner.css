@@ -27,6 +27,43 @@ window.malus-notification-window {
     line-height: 1.28;
 }
 
+.notif-meta-time {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.68;
+}
+
+.notif-thumb-frame {
+    border-radius: 10px;
+    overflow: hidden;
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.notif-actions-row {
+    margin-top: 8px;
+}
+
+button.notif-action-btn {
+    border: none;
+    border-radius: 9999px;
+    padding: 4px 12px;
+    min-height: 26px;
+    font-size: 12px;
+    font-weight: 600;
+    transition: background-color 120ms ease;
+}
+
+button.notif-stack-pill {
+    border: none;
+    border-radius: 9999px;
+    padding: 2px 9px;
+    min-height: 20px;
+    font-size: 11px;
+    font-weight: 700;
+    transition: background-color 120ms ease;
+}
+
 /* Botón circular flotante ✕ en la esquina superior izquierda (visible solo al pasar el cursor) */
 button.notif-close-btn {
     min-width: 22px;
@@ -46,4 +83,75 @@ button.notif-close-btn.visible {
 button.notif-close-btn image {
     min-width: 11px;
     min-height: 11px;
+}
+
+/* Centro de Notificaciones desplegable */
+window.malus-notification-center-window {
+    background-color: transparent;
+}
+
+.notif-center-shell {
+    padding: 18px 16px 16px 16px;
+    min-width: 368px;
+}
+
+.notif-center-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+button.notif-center-clear-btn {
+    border: none;
+    border-radius: 9999px;
+    padding: 4px 11px;
+    min-height: 26px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.notif-center-focus-bar {
+    border-radius: 14px;
+    padding: 8px 12px;
+}
+
+.notif-center-focus-label {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.notif-center-group-card {
+    border-radius: 20px;
+    padding: 12px 13px;
+}
+
+.notif-center-group-app {
+    font-size: 12.5px;
+    font-weight: 700;
+}
+
+.notif-center-item-sep {
+    min-height: 1px;
+    margin: 7px 0;
+}
+
+.notif-center-silenced-badge {
+    font-size: 10.5px;
+    font-weight: 600;
+    border-radius: 9999px;
+    padding: 1px 7px;
+}
+
+.notif-center-empty {
+    font-size: 13px;
+    opacity: 0.72;
+    padding: 36px 16px;
+}
+
+button.notif-center-item-close {
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 9999px;
 }

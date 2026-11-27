@@ -1,5 +1,6 @@
 use glib::ControlFlow;
-use gtk4::Label;
+use gtk4::prelude::*;
+use gtk4::{GestureClick, Label};
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
@@ -70,7 +71,21 @@ pub fn create_clock_widget() -> Label {
         builder = builder.cursor(&cursor);
     }
 
-    let clock_label = builder.build();
+    let clock_label = builder
+        .tooltip_text("Abrir Centro de Notificaciones")
+        .build();
+    let click = GestureClick::new();
+    click.set_button(1);
+    click.connect_released(|_, _, _, _| {
+        crate::ui::control_center::close_control_center_if_not_editing();
+        std::thread::spawn(|| {
+            let _ = malus_de_common::ipc::IpcClient::send_command(
+                malus_de_common::ipc::IpcMessage::ToggleNotificationCenter,
+            );
+        });
+    });
+    clock_label.add_controller(click);
+
     CLOCK_LABEL.with(|cell| {
         *cell.borrow_mut() = Some(gtk4::prelude::ObjectExt::downgrade(&clock_label));
     });

@@ -6031,6 +6031,7 @@ pub fn run_drm() -> Result<()> {
                     if matches!(
                         surface.namespace(),
                         "malus-notifications"
+                            | "malus-notification-center"
                             | "malus-control-center"
                             | "malus-control-center-editor"
                     ) {
@@ -6793,7 +6794,8 @@ pub fn run_drm() -> Result<()> {
                                                 let radius = match ns.as_ref() {
                                                     "malus-dock" => dock_radius * scale as f32,
                                                     "malus-app-switcher" => 32.0 * scale as f32,
-                                                    "malus-control-center-editor" => {
+                                                    "malus-control-center-editor"
+                                                    | "malus-notification-center" => {
                                                         34.0 * scale as f32
                                                     }
                                                     "malus-spotlight-controls"
@@ -6819,8 +6821,11 @@ pub fn run_drm() -> Result<()> {
                                                     );
                                                     let is_notification =
                                                         ns == "malus-notifications";
-                                                    let is_cc_editor =
-                                                        ns == "malus-control-center-editor";
+                                                    let is_cc_editor = matches!(
+                                                        ns.as_ref(),
+                                                        "malus-control-center-editor"
+                                                            | "malus-notification-center"
+                                                    );
                                                     let with_menu_shadow =
                                                         is_notification || is_cc_editor;
                                                     let phys_rect = if ns == "malus-dock" {
