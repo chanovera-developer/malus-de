@@ -1040,37 +1040,7 @@ impl WindowRenderFlags {
                 !id.contains("org.malus_de.dock") && !id.contains("malus-de-dock")
             });
 
-        let uses_ssd = if is_browser {
-            false
-        } else {
-            let is_gnome = id_lower.as_deref().is_some_and(|lower| {
-                lower.starts_with("org.gnome.")
-                    || lower.contains("nautilus")
-                    || lower.contains("malus.settings")
-                    || lower.contains("malus-de-settings")
-                    || lower.contains("malus_de_settings")
-                    || lower == "branches"
-                    || lower.contains("malus.branches")
-                    || lower.contains("malus-de-branches")
-                    || lower.contains("malus_de_branches")
-                    || lower.contains("ptyxis")
-                    || lower.contains("texteditor")
-                    || lower.contains("calculator")
-                    || lower.contains("systemmonitor")
-            });
-            if is_gnome {
-                false
-            } else if let Some(toplevel) = window.toplevel() {
-                let state = toplevel.current_state();
-                let is_fullscreen = state.states.contains(
-                    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
-                );
-                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                !is_fullscreen && state.decoration_mode == Some(Mode::ServerSide)
-            } else {
-                false
-            }
-        };
+        let uses_ssd = window_uses_ssd(window);
 
         Self {
             is_firefox,
@@ -6108,11 +6078,24 @@ delegate_viewporter!(MalusState);
 delegate_presentation!(MalusState);
 delegate_xdg_decoration!(MalusState);
 
+pub fn effective_xdg_decoration_mode(
+    requested: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    is_gnome: bool,
+) -> smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode {
+    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+    if is_gnome {
+        Mode::ClientSide
+    } else {
+        requested
+    }
+}
+
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusState {
     fn new_decoration(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
         // Preferir barra nativa de Gnome (CSD) con controles semáforo.
-        // Solo las ventanas que negocien y soliciten explícitamente ServerSide recibirán barra SSD.
+        // Solo las ventanas que negocien y soliciten explícitamente ServerSide recibirán barra SSD
+        // (incluyendo popups de navegadores como el selector de cuentas de Google en Brave/Chromium).
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(Mode::ClientSide);
         });
@@ -6125,18 +6108,23 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
     ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
         let win_opt = self.window_for_surface(toplevel.wl_surface());
-        let cannot_have_ssd = win_opt
-            .as_ref()
-            .is_some_and(|w| is_browser_window(w) || is_gnome_window(w));
-        let effective_mode = if cannot_have_ssd {
-            Mode::ClientSide
-        } else {
-            mode
-        };
+        let is_gnome = win_opt.as_ref().is_some_and(is_gnome_window);
+        let effective_mode = effective_xdg_decoration_mode(mode, is_gnome);
         if effective_mode == Mode::ServerSide {
             if let Some(ref win) = win_opt {
+                if is_browser_window(win) {
+                    tracing::info!(
+                        "🪟 [xdg-decoration] Concediendo barra SSD a ventana de navegador: {:?}",
+                        window_title_for_ssd(win)
+                    );
+                }
                 if let Some(loc) = self.space.element_location(win) {
-                    let min_y = 36 + crate::ssd::SSD_TITLEBAR_HEIGHT;
+                    let usable_y = self
+                        .origin_output_for_window(win)
+                        .or_else(|| self.primary_output())
+                        .map(|o| self.usable_zone_for_output(&o).loc.y)
+                        .unwrap_or(36);
+                    let min_y = usable_y + crate::ssd::SSD_TITLEBAR_HEIGHT;
                     if loc.y < min_y {
                         self.space
                             .map_element(win.clone(), Point::from((loc.x, min_y + 8)), false);
@@ -6161,6 +6149,11 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
 pub fn is_gnome_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
     if let Some(id) = app_id {
         let lower = id.to_lowercase();
+        // Los navegadores externos (Brave, Chrome, Chromium, Firefox, etc.) nunca deben clasificarse
+        // como apps GNOME solo porque el título de una página web diga "Configuración" o "Calendario".
+        if !lower.contains("epiphany") && is_browser_identifier(id) {
+            return false;
+        }
         if lower.starts_with("org.gnome.")
             || lower.contains(".gnome.")
             || lower.starts_with("gnome-")
@@ -6169,6 +6162,10 @@ pub fn is_gnome_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
             || lower.contains("malus.settings")
             || lower.contains("malus-de-settings")
             || lower.contains("malus_de_settings")
+            || lower == "branches"
+            || lower.contains("malus.branches")
+            || lower.contains("malus-de-branches")
+            || lower.contains("malus_de_branches")
             || lower.contains("ptyxis")
             || lower.contains("loupe")
             || lower.contains("baobab")
@@ -6284,24 +6281,52 @@ pub fn is_settings_window(window: &smithay::desktop::Window) -> bool {
             .is_some_and(|toplevel| matches(toplevel.wl_surface()))
 }
 
+pub fn x11_window_type_allows_ssd(
+    window_type: Option<smithay::xwayland::xwm::WmWindowType>,
+) -> bool {
+    use smithay::xwayland::xwm::WmWindowType;
+    matches!(
+        window_type,
+        None | Some(WmWindowType::Normal)
+            | Some(WmWindowType::Dialog)
+            | Some(WmWindowType::Utility)
+    )
+}
+
+pub fn x11_window_uses_ssd(x11: &smithay::xwayland::X11Surface) -> bool {
+    // En Smithay, `X11Surface::is_decorated()` devuelve `true` cuando el cliente
+    // desactivó las decoraciones del WM vía `_MOTIF_WM_HINTS` (dibuja CSD).
+    // Cuando devuelve `false`, la ventana espera barra de título SSD del compositor.
+    !x11.is_override_redirect()
+        && !x11.is_fullscreen()
+        && !x11.is_decorated()
+        && x11_window_type_allows_ssd(x11.window_type())
+}
+
 /// Determina si una ventana tiene activadas las decoraciones del lado del servidor (SSD) estilo macOS.
 pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
-    // Aplicaciones de GNOME, Nautilus, Ajustes y navegadores NUNCA llevan barra SSD superior (usan su propia barra nativa u oculta)
-    if is_browser_window(window) || is_gnome_window(window) {
+    // Aplicaciones de GNOME / GTK / Malus con CSD nativo nunca llevan barra SSD superior.
+    // Los navegadores (Brave, Chrome, Firefox, etc.) usan CSD en su ventana principal con pestañas,
+    // pero SÍ reciben barra SSD cuando una ventana emergente (p. ej. selector de cuentas de Google)
+    // solicita explícitamente `Mode::ServerSide` o decoraciones WM en XWayland.
+    if is_gnome_window(window) {
         return false;
     }
-    let Some(toplevel) = window.toplevel() else {
-        return false;
-    };
-    let is_fullscreen = toplevel.current_state().states.contains(
-        smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
-    );
-    if is_fullscreen {
-        return false;
+    if let Some(toplevel) = window.toplevel() {
+        let state = toplevel.current_state();
+        let is_fullscreen = state.states.contains(
+            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
+        );
+        if is_fullscreen {
+            return false;
+        }
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        return state.decoration_mode == Some(Mode::ServerSide);
     }
-    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-    // Solo si la ventana negoció y solicitó explícitamente Mode::ServerSide
-    toplevel.current_state().decoration_mode == Some(Mode::ServerSide)
+    if let Some(x11) = window.x11_surface() {
+        return x11_window_uses_ssd(x11);
+    }
+    false
 }
 
 /// Obtiene el título visible que debe mostrarse en la barra SSD de la ventana.
@@ -6317,6 +6342,16 @@ pub fn window_title_for_ssd(window: &smithay::desktop::Window) -> String {
             if !id.trim().is_empty() {
                 return id;
             }
+        }
+    }
+    if let Some(x11) = window.x11_surface() {
+        let title = x11.title();
+        if !title.trim().is_empty() {
+            return title;
+        }
+        let class = x11.class();
+        if !class.trim().is_empty() {
+            return class;
         }
     }
     String::new()
@@ -6969,6 +7004,8 @@ impl MalusState {
                 self.record_close_button_hint(&window);
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.send_close();
+                } else if let Some(x11) = window.x11_surface() {
+                    let _ = x11.close();
                 }
                 true
             }
@@ -9041,39 +9078,53 @@ impl XdgShellHandler for MalusState {
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
         if surface.parent().is_none() {
             if let Some(id) = app_id_for_surface(surface.wl_surface()) {
-                if let Some(saved) = self.get_saved_window_size(&id) {
-                    let win_opt = self.window_for_surface(surface.wl_surface());
-                    let cur_geo = win_opt.as_ref().map(|w| w.geometry());
-                    let is_unconfigured = cur_geo
-                        .map(|g| g.size.w <= 200 || g.size.h <= 200)
-                        .unwrap_or(true);
-                    if is_unconfigured {
-                        let output = win_opt
-                            .as_ref()
-                            .and_then(|w| self.origin_output_for_window(w))
-                            .or_else(|| self.primary_output());
-                        let usable = output
-                            .as_ref()
-                            .map(|o| self.usable_zone_for_output(o))
-                            .unwrap_or_else(|| Rectangle::new((0, 36).into(), (1920, 1044).into()));
-                        let ssd_top = win_opt
-                            .as_ref()
-                            .filter(|w| window_uses_ssd(w))
-                            .map(|_| crate::ssd::SSD_TITLEBAR_HEIGHT)
-                            .unwrap_or(0);
-                        let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
-                        let clamped = clamp_size_to_bounds(saved, max_bounds);
-                        tracing::info!(
-                            "📐 [app_id_changed] Aplicando tamaño recordado para {}: {:?}",
-                            id,
-                            clamped
-                        );
-                        self.initially_placed_windows.remove(surface.wl_surface());
-                        surface.with_pending_state(|state| {
-                            state.bounds = Some(max_bounds);
-                            state.size = Some(clamped);
-                        });
-                        surface.send_configure();
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                let pending_or_current_ssd = surface.current_state().decoration_mode
+                    == Some(Mode::ServerSide)
+                    || surface.with_pending_state(|s| s.decoration_mode == Some(Mode::ServerSide));
+                let has_other_same_browser_window = is_browser_identifier(&id)
+                    && self.space.elements().any(|w| {
+                        w.wl_surface().as_deref() != Some(surface.wl_surface())
+                            && w.wl_surface()
+                                .and_then(|s| app_id_for_surface(s.as_ref()))
+                                .is_some_and(|other_id| other_id == id)
+                    });
+                let is_browser_ssd_popup = pending_or_current_ssd && has_other_same_browser_window;
+                if !is_browser_ssd_popup {
+                    if let Some(saved) = self.get_saved_window_size(&id) {
+                        let win_opt = self.window_for_surface(surface.wl_surface());
+                        let cur_geo = win_opt.as_ref().map(|w| w.geometry());
+                        let is_unconfigured = cur_geo
+                            .map(|g| g.size.w <= 200 || g.size.h <= 200)
+                            .unwrap_or(true);
+                        if is_unconfigured {
+                            let output = win_opt
+                                .as_ref()
+                                .and_then(|w| self.origin_output_for_window(w))
+                                .or_else(|| self.primary_output());
+                            let usable = output
+                                .as_ref()
+                                .map(|o| self.usable_zone_for_output(o))
+                                .unwrap_or_else(|| Rectangle::new((0, 36).into(), (1920, 1044).into()));
+                            let ssd_top = win_opt
+                                .as_ref()
+                                .filter(|w| window_uses_ssd(w))
+                                .map(|_| crate::ssd::SSD_TITLEBAR_HEIGHT)
+                                .unwrap_or(0);
+                            let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                            let clamped = clamp_size_to_bounds(saved, max_bounds);
+                            tracing::info!(
+                                "📐 [app_id_changed] Aplicando tamaño recordado para {}: {:?}",
+                                id,
+                                clamped
+                            );
+                            self.initially_placed_windows.remove(surface.wl_surface());
+                            surface.with_pending_state(|state| {
+                                state.bounds = Some(max_bounds);
+                                state.size = Some(clamped);
+                            });
+                            surface.send_configure();
+                        }
                     }
                 }
             }
@@ -9577,6 +9628,55 @@ mod tests {
         assert!(!is_gnome_identity(Some("alacritty"), Some("Alacritty")));
         assert!(!is_gnome_identity(Some("foot"), Some("Foot")));
         assert!(!is_gnome_identity(Some("code"), Some("Visual Studio Code")));
+
+        // Navegadores externos no deben clasificarse como apps GNOME aunque el título web diga "Configuración" o "Calendario"
+        assert!(!is_gnome_identity(
+            Some("brave-browser"),
+            Some("Configuración de cuenta de Google - Brave")
+        ));
+        assert!(!is_gnome_identity(
+            Some("brave-origin"),
+            Some("Iniciar sesión: Cuentas de Google - Brave")
+        ));
+        assert!(!is_gnome_identity(
+            Some("google-chrome"),
+            Some("Calendario de Google")
+        ));
+        // GNOME Web (Epiphany) y Branches sí usan CSD nativo
+        assert!(is_gnome_identity(Some("org.gnome.Epiphany"), None));
+        assert!(is_gnome_identity(Some("dev.malus.Branches"), None));
+    }
+
+    #[test]
+    fn browser_popups_can_negotiate_ssd_while_gnome_stays_csd() {
+        use super::{effective_xdg_decoration_mode, x11_window_type_allows_ssd};
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        use smithay::xwayland::xwm::WmWindowType;
+
+        // Ventana principal de navegador pide ClientSide -> se respeta ClientSide (sin doble barra)
+        assert_eq!(
+            effective_xdg_decoration_mode(Mode::ClientSide, false),
+            Mode::ClientSide
+        );
+        // Popup de navegador (p. ej. selector de cuentas Google en Brave/Chromium) pide ServerSide -> se concede SSD
+        assert_eq!(
+            effective_xdg_decoration_mode(Mode::ServerSide, false),
+            Mode::ServerSide
+        );
+        // Apps GNOME con CSD nativo mantienen ClientSide aunque soliciten ServerSide
+        assert_eq!(
+            effective_xdg_decoration_mode(Mode::ServerSide, true),
+            Mode::ClientSide
+        );
+
+        // Tipos de ventana X11 elegibles para SSD
+        assert!(x11_window_type_allows_ssd(None));
+        assert!(x11_window_type_allows_ssd(Some(WmWindowType::Normal)));
+        assert!(x11_window_type_allows_ssd(Some(WmWindowType::Dialog)));
+        assert!(x11_window_type_allows_ssd(Some(WmWindowType::Utility)));
+        assert!(!x11_window_type_allows_ssd(Some(WmWindowType::PopupMenu)));
+        assert!(!x11_window_type_allows_ssd(Some(WmWindowType::Tooltip)));
+        assert!(!x11_window_type_allows_ssd(Some(WmWindowType::Splash)));
     }
 
     #[test]
