@@ -16,14 +16,21 @@ use smithay::{
     input::keyboard::{keysyms, Keysym, ModifiersState},
     utils::{Logical, Physical, Point, Rectangle, Size},
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::ffi::OsStr;
 use std::fs;
+use std::mem::MaybeUninit;
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{info, warn};
 
 const WIDTH: i32 = 626;
 const HEIGHT: i32 = 110;
@@ -540,6 +547,9 @@ pub struct SpotlightState {
 
     pub apps: Vec<AppEntry>,
     pub files: Vec<FileEntry>,
+    reactive_index: ReactiveSpotlightIndex,
+    applied_apps_version: u64,
+    applied_files_version: u64,
     pub clipboard_items: Vec<(String, String)>,
     pub canopy_cfg: malus_de_common::config::CanopyConfig,
     icon_cache: HashMap<String, Option<ImageSurface>>,
@@ -568,8 +578,9 @@ impl Default for SpotlightState {
 impl SpotlightState {
     pub fn new() -> Self {
         let canopy_cfg = malus_de_common::config::CanopyConfig::load();
-        let apps = index_applications();
-        let files = index_files();
+        let reactive_index = ReactiveSpotlightIndex::start_default();
+        let (applied_apps_version, apps) = reactive_index.snapshot_apps();
+        let (applied_files_version, files) = reactive_index.snapshot_files();
         let clipboard_items = load_clipboard_items(&canopy_cfg);
         Self {
             is_open: false,
@@ -590,6 +601,9 @@ impl SpotlightState {
             active_template: None,
             apps,
             files,
+            reactive_index,
+            applied_apps_version,
+            applied_files_version,
             clipboard_items,
             canopy_cfg,
             icon_cache: HashMap::new(),
@@ -742,10 +756,44 @@ impl SpotlightState {
         self.last_dock_gap_preview = None;
         self.canopy_cfg = malus_de_common::config::CanopyConfig::load();
         self.clipboard_items = load_clipboard_items(&self.canopy_cfg);
-        self.files = index_files();
-        self.apps = index_applications();
+        self.poll_reactive_updates();
         self.mask_dirty = true;
         self.last_render_signature = 0;
+    }
+
+    /// Aplica actualizaciones recibidas del hilo reactivo `inotify` sin bloquear el compositor.
+    pub fn poll_reactive_updates(&mut self) -> bool {
+        let mut changed = false;
+        let latest_apps_ver = self.reactive_index.apps_version();
+        if latest_apps_ver != self.applied_apps_version {
+            let (ver, apps) = self.reactive_index.snapshot_apps();
+            self.apps = apps;
+            self.applied_apps_version = ver;
+            self.icon_cache.clear();
+            changed = true;
+        }
+        let latest_files_ver = self.reactive_index.files_version();
+        if latest_files_ver != self.applied_files_version {
+            let (ver, files) = self.reactive_index.snapshot_files();
+            self.files = files;
+            self.applied_files_version = ver;
+            changed = true;
+        }
+        if changed {
+            let count = if self.mode == SpotlightMode::Applications {
+                self.filtered_apps().len()
+            } else {
+                self.current_rows().len()
+            };
+            if count == 0 {
+                self.selected_index = 0;
+            } else if self.selected_index >= count {
+                self.selected_index = count - 1;
+            }
+            self.last_render_signature = 0;
+            self.mask_dirty = true;
+        }
+        changed
     }
 
     pub fn open_on_output(&mut self, output_name: Option<String>) {
@@ -1248,8 +1296,8 @@ impl SpotlightState {
         if mode == SpotlightMode::Clipboard {
             self.canopy_cfg = malus_de_common::config::CanopyConfig::load();
             self.clipboard_items = load_clipboard_items(&self.canopy_cfg);
-        } else if mode == SpotlightMode::Files {
-            self.files = index_files();
+        } else if matches!(mode, SpotlightMode::Files | SpotlightMode::Applications) {
+            self.poll_reactive_updates();
         }
         self.sync_transitions(now);
     }
@@ -1866,6 +1914,8 @@ impl SpotlightState {
             return None;
         }
 
+        self.poll_reactive_updates();
+
         let now = Instant::now();
         self.sync_transitions(now);
 
@@ -1912,6 +1962,8 @@ impl SpotlightState {
         mix(&mut sig, self.selected_index as u64);
         mix(&mut sig, (self.scroll_offset * 10.0).round() as u64);
         mix(&mut sig, self.active_filter as u64);
+        mix(&mut sig, self.applied_apps_version);
+        mix(&mut sig, self.applied_files_version);
         mix(&mut sig, u64::from(is_dark_theme));
         mix(&mut sig, caret_blink);
         mix(&mut sig, phys_w as u64);
@@ -3735,18 +3787,437 @@ fn spawn_shell_command(command_line: &str) {
     }
 }
 
-pub fn index_applications() -> Vec<AppEntry> {
-    let mut apps = Vec::new();
+const REACTIVE_INDEX_DEBOUNCE: Duration = Duration::from_millis(120);
+
+struct SharedReactiveIndex {
+    apps_version: AtomicU64,
+    files_version: AtomicU64,
+    apps: Mutex<Vec<AppEntry>>,
+    files: Mutex<Vec<FileEntry>>,
+    stop: AtomicBool,
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+struct WatchRole {
+    is_app: bool,
+    is_file: bool,
+    is_ancestor: bool,
+}
+
+struct ReactiveSpotlightIndex {
+    shared: Arc<SharedReactiveIndex>,
+    wake_fd: Option<Arc<OwnedFd>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl ReactiveSpotlightIndex {
+    fn start_default() -> Self {
+        Self::start_with_dirs(
+            default_application_dirs(),
+            default_file_index_dirs(),
+            REACTIVE_INDEX_DEBOUNCE,
+        )
+    }
+
+    fn start_with_dirs(
+        app_dirs: Vec<PathBuf>,
+        file_dirs: Vec<PathBuf>,
+        debounce: Duration,
+    ) -> Self {
+        let inotify_fd = rustix::fs::inotify::init(
+            rustix::fs::inotify::CreateFlags::NONBLOCK | rustix::fs::inotify::CreateFlags::CLOEXEC,
+        );
+        let wake_fd = rustix::event::eventfd(
+            0,
+            rustix::event::EventfdFlags::NONBLOCK | rustix::event::EventfdFlags::CLOEXEC,
+        );
+
+        let mut wd_map: HashMap<i32, WatchRole> = HashMap::new();
+        let mut watched_app_dirs: HashSet<PathBuf> = HashSet::new();
+        let mut watched_file_dirs: HashSet<PathBuf> = HashSet::new();
+
+        let (inotify_fd, wake_fd) = match (inotify_fd, wake_fd) {
+            (Ok(in_fd), Ok(ev_fd)) => {
+                sync_inotify_watches(
+                    &in_fd,
+                    &app_dirs,
+                    &file_dirs,
+                    &mut wd_map,
+                    &mut watched_app_dirs,
+                    &mut watched_file_dirs,
+                );
+                (Some(in_fd), Some(Arc::new(ev_fd)))
+            }
+            (Err(err), _) => {
+                warn!("⚠️ [Canopy] No se pudo inicializar inotify para indexación reactiva: {err:?}");
+                (None, None)
+            }
+            (_, Err(err)) => {
+                warn!("⚠️ [Canopy] No se pudo inicializar eventfd para el watcher de Canopy: {err:?}");
+                (None, None)
+            }
+        };
+
+        // Escaneo inicial realizado DESPUÉS de registrar los watches inotify para no perder
+        // ningún cambio ocurrido durante el arranque.
+        let initial_apps = index_applications_in_dirs(&app_dirs);
+        let initial_files = index_files_in_dirs(&file_dirs);
+        let watched_count = wd_map.len();
+        let initial_app_count = initial_apps.len();
+        let shared = Arc::new(SharedReactiveIndex {
+            apps_version: AtomicU64::new(1),
+            files_version: AtomicU64::new(1),
+            apps: Mutex::new(initial_apps),
+            files: Mutex::new(initial_files),
+            stop: AtomicBool::new(false),
+        });
+
+        let worker = if let (Some(in_fd), Some(ev_fd)) = (inotify_fd, wake_fd.clone()) {
+            let shared_bg = shared.clone();
+            match std::thread::Builder::new()
+                .name("malus-canopy-inotify".to_string())
+                .spawn(move || {
+                    run_reactive_inotify_loop(
+                        in_fd,
+                        ev_fd,
+                        app_dirs,
+                        file_dirs,
+                        wd_map,
+                        watched_app_dirs,
+                        watched_file_dirs,
+                        shared_bg,
+                        debounce,
+                    );
+                }) {
+                Ok(handle) => {
+                    info!(
+                        "👁️ [Canopy] Monitoreo reactivo inotify activo ({watched_count} rutas vigiladas, {initial_app_count} apps iniciales)"
+                    );
+                    Some(handle)
+                }
+                Err(err) => {
+                    warn!("⚠️ [Canopy] No se pudo iniciar el hilo inotify de Canopy: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        Self {
+            shared,
+            wake_fd,
+            worker,
+        }
+    }
+
+    fn apps_version(&self) -> u64 {
+        self.shared.apps_version.load(Ordering::Acquire)
+    }
+
+    fn files_version(&self) -> u64 {
+        self.shared.files_version.load(Ordering::Acquire)
+    }
+
+    fn snapshot_apps(&self) -> (u64, Vec<AppEntry>) {
+        let guard = self.shared.apps.lock().unwrap_or_else(|e| e.into_inner());
+        let version = self.shared.apps_version.load(Ordering::Acquire);
+        (version, guard.clone())
+    }
+
+    fn snapshot_files(&self) -> (u64, Vec<FileEntry>) {
+        let guard = self.shared.files.lock().unwrap_or_else(|e| e.into_inner());
+        let version = self.shared.files_version.load(Ordering::Acquire);
+        (version, guard.clone())
+    }
+}
+
+impl Drop for ReactiveSpotlightIndex {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::Release);
+        if let Some(ref wake_fd) = self.wake_fd {
+            let _ = rustix::io::write(wake_fd.as_ref(), &1u64.to_ne_bytes());
+        }
+        if let Some(handle) = self.worker.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        if dir.is_dir() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn sync_inotify_watches(
+    inotify_fd: &OwnedFd,
+    app_dirs: &[PathBuf],
+    file_dirs: &[PathBuf],
+    wd_map: &mut HashMap<i32, WatchRole>,
+    watched_app_dirs: &mut HashSet<PathBuf>,
+    watched_file_dirs: &mut HashSet<PathBuf>,
+) -> (bool, bool) {
+    use rustix::fs::inotify::{self, WatchFlags};
+
+    let target_flags = WatchFlags::CREATE
+        | WatchFlags::DELETE
+        | WatchFlags::MOVED_FROM
+        | WatchFlags::MOVED_TO
+        | WatchFlags::CLOSE_WRITE
+        | WatchFlags::ATTRIB
+        | WatchFlags::DELETE_SELF
+        | WatchFlags::MOVE_SELF;
+    let ancestor_flags =
+        WatchFlags::CREATE | WatchFlags::MOVED_TO | WatchFlags::DELETE_SELF | WatchFlags::MOVE_SELF;
+
+    let mut newly_watched_apps = false;
+    let mut newly_watched_files = false;
+    let mut desired: HashMap<PathBuf, WatchRole> = HashMap::new();
+
+    watched_app_dirs.retain(|d| d.is_dir());
+    watched_file_dirs.retain(|d| d.is_dir());
+
+    for dir in app_dirs {
+        if dir.is_dir() {
+            desired.entry(dir.clone()).or_default().is_app = true;
+            if watched_app_dirs.insert(dir.clone()) {
+                newly_watched_apps = true;
+            }
+        } else if let Some(anc) = nearest_existing_ancestor(dir) {
+            desired.entry(anc).or_default().is_ancestor = true;
+        }
+    }
+
+    for dir in file_dirs {
+        if dir.is_dir() {
+            desired.entry(dir.clone()).or_default().is_file = true;
+            if watched_file_dirs.insert(dir.clone()) {
+                newly_watched_files = true;
+            }
+        } else if let Some(anc) = nearest_existing_ancestor(dir) {
+            desired.entry(anc).or_default().is_ancestor = true;
+        }
+    }
+
+    wd_map.clear();
+    for (path, role) in desired {
+        let flags = if role.is_app || role.is_file {
+            target_flags
+        } else {
+            ancestor_flags
+        };
+        if let Ok(wd) = inotify::add_watch(inotify_fd, &path, flags) {
+            let entry = wd_map.entry(wd).or_default();
+            entry.is_app |= role.is_app;
+            entry.is_file |= role.is_file;
+            entry.is_ancestor |= role.is_ancestor;
+        }
+    }
+
+    (newly_watched_apps, newly_watched_files)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_reactive_inotify_loop(
+    inotify_fd: OwnedFd,
+    wake_fd: Arc<OwnedFd>,
+    app_dirs: Vec<PathBuf>,
+    file_dirs: Vec<PathBuf>,
+    mut wd_map: HashMap<i32, WatchRole>,
+    mut watched_app_dirs: HashSet<PathBuf>,
+    mut watched_file_dirs: HashSet<PathBuf>,
+    shared: Arc<SharedReactiveIndex>,
+    debounce: Duration,
+) {
+    use rustix::event::{poll, PollFd, PollFlags};
+    use rustix::fs::inotify::{self, ReadFlags};
+    use rustix::io::Errno;
+
+    let mut apps_dirty = false;
+    let mut files_dirty = false;
+    let mut resync_watches = false;
+    let mut debounce_deadline: Option<Instant> = None;
+    let mut raw_buf = [MaybeUninit::<u8>::uninit(); 4096];
+
+    loop {
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
+
+        let timeout_ms: i32 = match debounce_deadline {
+            Some(deadline) => {
+                let rem = deadline.saturating_duration_since(Instant::now());
+                if rem.is_zero() {
+                    0
+                } else {
+                    rem.as_millis().clamp(1, i32::MAX as u128) as i32
+                }
+            }
+            None => -1,
+        };
+
+        let mut poll_fds = [
+            PollFd::new(&inotify_fd, PollFlags::IN),
+            PollFd::new(wake_fd.as_ref(), PollFlags::IN),
+        ];
+        match poll(&mut poll_fds, timeout_ms) {
+            Ok(_) => {}
+            Err(Errno::INTR) => continue,
+            Err(_) => break,
+        }
+
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
+
+        if poll_fds[0].revents().contains(PollFlags::IN) {
+            let mut reader = inotify::Reader::new(&inotify_fd, &mut raw_buf);
+            let mut saw_relevant = false;
+            loop {
+                match reader.next() {
+                    Ok(ev) => {
+                        let flags = ev.events();
+                        if flags.contains(ReadFlags::QUEUE_OVERFLOW) {
+                            apps_dirty = true;
+                            files_dirty = true;
+                            resync_watches = true;
+                            saw_relevant = true;
+                            continue;
+                        }
+
+                        let Some(role) = wd_map.get(&ev.wd()).copied() else {
+                            if flags.contains(ReadFlags::IGNORED) {
+                                resync_watches = true;
+                                saw_relevant = true;
+                            }
+                            continue;
+                        };
+
+                        let self_changed = flags.intersects(
+                            ReadFlags::DELETE_SELF
+                                | ReadFlags::MOVE_SELF
+                                | ReadFlags::IGNORED
+                                | ReadFlags::UNMOUNT,
+                        );
+                        let name_str = ev.file_name().and_then(|c| c.to_str().ok());
+
+                        if role.is_app {
+                            if self_changed {
+                                resync_watches = true;
+                                apps_dirty = true;
+                                saw_relevant = true;
+                            } else {
+                                let is_desktop = name_str.is_none_or(|name| {
+                                    name.rsplit('.')
+                                        .next()
+                                        .is_some_and(|ext| ext.eq_ignore_ascii_case("desktop"))
+                                });
+                                if is_desktop || flags.contains(ReadFlags::ISDIR) {
+                                    apps_dirty = true;
+                                    saw_relevant = true;
+                                }
+                            }
+                        }
+
+                        if role.is_file {
+                            if self_changed {
+                                resync_watches = true;
+                                files_dirty = true;
+                                saw_relevant = true;
+                            } else {
+                                let is_hidden =
+                                    name_str.is_some_and(|name| name.starts_with('.'));
+                                if !is_hidden {
+                                    files_dirty = true;
+                                    saw_relevant = true;
+                                }
+                            }
+                        }
+
+                        if role.is_ancestor
+                            && (self_changed
+                                || flags.intersects(ReadFlags::CREATE | ReadFlags::MOVED_TO))
+                        {
+                            resync_watches = true;
+                            saw_relevant = true;
+                        }
+                    }
+                    Err(Errno::AGAIN) => break,
+                    Err(_) => break,
+                }
+            }
+
+            if saw_relevant {
+                debounce_deadline = Some(Instant::now() + debounce);
+            }
+        }
+
+        if debounce_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            debounce_deadline = None;
+            if resync_watches {
+                let (new_apps, new_files) = sync_inotify_watches(
+                    &inotify_fd,
+                    &app_dirs,
+                    &file_dirs,
+                    &mut wd_map,
+                    &mut watched_app_dirs,
+                    &mut watched_file_dirs,
+                );
+                apps_dirty |= new_apps;
+                files_dirty |= new_files;
+                resync_watches = false;
+            }
+
+            if apps_dirty {
+                apps_dirty = false;
+                let updated_apps = index_applications_in_dirs(&app_dirs);
+                let count = updated_apps.len();
+                if let Ok(mut guard) = shared.apps.lock() {
+                    *guard = updated_apps;
+                }
+                shared.apps_version.fetch_add(1, Ordering::Release);
+                info!(
+                    "🔄 [Canopy] Índice de aplicaciones actualizado reactivamente vía inotify ({count} apps)"
+                );
+            }
+
+            if files_dirty {
+                files_dirty = false;
+                let updated_files = index_files_in_dirs(&file_dirs);
+                if let Ok(mut guard) = shared.files.lock() {
+                    *guard = updated_files;
+                }
+                shared.files_version.fetch_add(1, Ordering::Release);
+            }
+        }
+    }
+}
+
+fn default_application_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
-    let dirs = application_dirs_from(
+    application_dirs_from(
         home.as_deref(),
         xdg_data_home.as_deref(),
         xdg_data_dirs.as_deref(),
-    );
+    )
+}
 
-    for dir in &dirs {
+pub fn index_applications() -> Vec<AppEntry> {
+    let dirs = default_application_dirs();
+    index_applications_in_dirs(&dirs)
+}
+
+pub(crate) fn index_applications_in_dirs(dirs: &[PathBuf]) -> Vec<AppEntry> {
+    let mut apps = Vec::new();
+    for dir in dirs {
         if dir.exists() {
             if let Ok(entries) = fs::read_dir(dir) {
                 for entry in entries.flatten() {
@@ -3897,13 +4368,11 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
     })
 }
 
-fn index_files() -> Vec<FileEntry> {
-    let mut files = Vec::new();
+fn default_file_index_dirs() -> Vec<PathBuf> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
-        return files;
+        return Vec::new();
     };
-
-    let candidate_dirs = [
+    vec![
         home.join("Descargas"),
         home.join("Downloads"),
         home.join("Documentos"),
@@ -3913,10 +4382,15 @@ fn index_files() -> Vec<FileEntry> {
         home.join("Imágenes"),
         home.join("Pictures"),
         home.join("Proyectos"),
-    ];
+    ]
+}
 
-    let home_str = home.to_string_lossy();
-    for dir in &candidate_dirs {
+fn index_files_in_dirs(candidate_dirs: &[PathBuf]) -> Vec<FileEntry> {
+    let mut files = Vec::new();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home_str = home.as_ref().map(|h| h.to_string_lossy().into_owned());
+
+    for dir in candidate_dirs {
         if !dir.is_dir() {
             continue;
         }
@@ -3945,8 +4419,12 @@ fn index_files() -> Vec<FileEntry> {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
                 let full = path.to_string_lossy();
-                let display_path = if full.starts_with(home_str.as_ref()) {
-                    format!("~{}", &full[home_str.len()..])
+                let display_path = if let Some(ref hs) = home_str {
+                    if full.starts_with(hs.as_str()) {
+                        format!("~{}", &full[hs.len()..])
+                    } else {
+                        full.into_owned()
+                    }
                 } else {
                     full.into_owned()
                 };
@@ -4573,5 +5051,99 @@ mod tests {
             data.chunks_exact(4).any(|px| px[3] > 0),
             "La nube Poof debe dibujar píxeles visibles"
         );
+    }
+
+    #[test]
+    fn reactive_inotify_indexer_detects_install_update_missing_dir_and_uninstall() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("malus-canopy-inotify-test-{unique}"));
+        let app_dir = root.join("applications");
+        let late_flatpak_dir = root.join("flatpak_exports/applications");
+        let file_dir = root.join("docs");
+        fs::create_dir_all(&app_dir).unwrap();
+        fs::create_dir_all(&file_dir).unwrap();
+
+        let indexer = ReactiveSpotlightIndex::start_with_dirs(
+            vec![app_dir.clone(), late_flatpak_dir.clone()],
+            vec![file_dir.clone()],
+            Duration::from_millis(25),
+        );
+        assert!(indexer.snapshot_apps().1.is_empty());
+        assert!(indexer.snapshot_files().1.is_empty());
+
+        let wait_apps = |pred: &dyn Fn(&[AppEntry]) -> bool| -> Vec<AppEntry> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                let (_, apps) = indexer.snapshot_apps();
+                if pred(&apps) {
+                    return apps;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Timeout esperando actualización reactiva inotify de apps; estado actual: {:?}",
+                    apps.iter().map(|a| &a.name).collect::<Vec<_>>()
+                );
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        };
+
+        // 1. Instalar una aplicación nueva (.desktop)
+        let demo_path = app_dir.join("demo-app.desktop");
+        fs::write(
+            &demo_path,
+            "[Desktop Entry]\nType=Application\nName=DemoApp\nExec=/usr/bin/true\n",
+        )
+        .unwrap();
+        let apps = wait_apps(&|a| a.iter().any(|e| e.name == "DemoApp"));
+        assert_eq!(apps.len(), 1);
+
+        // 2. Actualizar el archivo .desktop existente
+        fs::write(
+            &demo_path,
+            "[Desktop Entry]\nType=Application\nName=DemoApp Renovada\nExec=/usr/bin/true\n",
+        )
+        .unwrap();
+        wait_apps(&|a| a.iter().any(|e| e.name == "DemoApp Renovada"));
+
+        // 3. Crear un directorio que no existía al arrancar (p. ej. Flatpak) y añadir una app
+        fs::create_dir_all(&late_flatpak_dir).unwrap();
+        fs::write(
+            late_flatpak_dir.join("flatpak-app.desktop"),
+            "[Desktop Entry]\nType=Application\nName=FlatpakApp\nExec=/usr/bin/true\n",
+        )
+        .unwrap();
+        wait_apps(&|a| {
+            a.iter().any(|e| e.name == "DemoApp Renovada")
+                && a.iter().any(|e| e.name == "FlatpakApp")
+        });
+
+        // 4. Desinstalar la primera app y confirmar que desaparece
+        fs::remove_file(&demo_path).unwrap();
+        let remaining = wait_apps(&|a| {
+            !a.iter().any(|e| e.name == "DemoApp Renovada")
+                && a.iter().any(|e| e.name == "FlatpakApp")
+        });
+        assert_eq!(remaining.len(), 1);
+
+        // 5. Detectar nuevo archivo en carpeta monitoreada
+        fs::write(file_dir.join("notas.txt"), "hola canopy").unwrap();
+        let file_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_, files) = indexer.snapshot_files();
+            if files.iter().any(|f| f.name == "notas.txt") {
+                break;
+            }
+            assert!(
+                Instant::now() < file_deadline,
+                "Timeout esperando actualización reactiva inotify de archivos"
+            );
+            std::thread::sleep(Duration::from_millis(15));
+        }
+
+        drop(indexer);
+        let _ = fs::remove_dir_all(&root);
     }
 }

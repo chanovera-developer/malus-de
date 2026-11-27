@@ -96,7 +96,7 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 | M12 | Ajustes del sistema | ✅ | App nativa con carga diferida; paneles de Apariencia, Pantallas, Fondo, Escritorio y Dock, Barra de menús, Sonido, Notificaciones, Pip/Canopy, Red, Wi-Fi, Bluetooth, VPN, Batería, Accesibilidad y General. |
 | M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
 | M14 | Optimización DRM | ✅ | Idle sleep, caché de fondos/miniaturas y ajustes de rendimiento ya aplicados. |
-| M15 | Spotlight reactivo | 📋 | Pendiente de integración de monitorización de apps. |
+| M15 | Spotlight reactivo | ✅ | Monitoreo reactivo nativo con `inotify` + `eventfd` en segundo plano para directorios `.desktop` (incluyendo Flatpak y carpetas creadas después del arranque) y archivos de usuario con *debounce* y apertura de Canopy sin I/O síncrono. |
 | M16 | Hotkeys (`XF86*`) y OSD | ✅ | Teclas de volumen, micrófono, brillo, luz de teclado, controles MPRIS2 y OSD flotante Liquid Glass squircle de 16 segmentos. |
 | M17 | Gestos, Trackpad y Hot Corners | 🟡 | Hot Corners (Mission Control, escritorio, bloqueo), gestos `swipe` 3+ dedos y *tap-to-click* activos; faltan `GesturePinch*`, scroll natural/aceleración/DWT en `libinput`, *shake cursor* y soporte táctil. |
 | M18 | Energía, Batería e Inactividad | 🟡 | Indicador y panel de Batería activos; pendientes `ext-idle-notify`, inhibición, cierre de tapa y suspensión automática. |
