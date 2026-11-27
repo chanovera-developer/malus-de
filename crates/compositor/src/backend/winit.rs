@@ -562,6 +562,16 @@ pub fn run_winit() -> Result<()> {
                                         }
                                     }
                                 }
+
+                                if is_esc && !has_super && !has_alt && !has_ctrl {
+                                    state.record_escape_cancel_hint();
+                                } else if (is_return || sym == keysyms::KEY_space.into())
+                                    && !has_super
+                                    && !has_alt
+                                    && !has_ctrl
+                                {
+                                    state.clear_close_hint_for_active_window();
+                                }
                             } else {
                                 state.media_keys.handle_key_release(key);
                                 // 7. Liberación de teclas (Key Release)

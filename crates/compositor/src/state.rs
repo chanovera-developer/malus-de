@@ -402,6 +402,25 @@ impl ShakeCursorState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlackHoleCloseReason {
+    /// Botón cerrar SSD o atajo/acción del compositor (`Alt+F4`, `Super+W`, `Super+Q`, Exposé).
+    CompositorClose,
+    /// Clic directo en la zona del botón cerrar de una ventana CSD.
+    CsdCloseClick,
+    /// Cancelación sin acción confirmada (botón «Cancelar» de un diálogo/modal o tecla `Escape`).
+    CancelAction,
+}
+
+impl BlackHoleCloseReason {
+    pub fn max_hint_age(self) -> Duration {
+        match self {
+            Self::CompositorClose => Duration::from_millis(2_500),
+            Self::CsdCloseClick | Self::CancelAction => Duration::from_millis(1_500),
+        }
+    }
+}
+
 pub struct CachedDndIcon {
     pub buffer: MemoryRenderBuffer,
     pub rel_offset_logical: (f64, f64),
@@ -453,7 +472,7 @@ pub struct MalusState {
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
-    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant, bool)>,
+    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant, BlackHoleCloseReason)>,
     /// Desplazamientos `(dx_desde_borde, dy_desde_arriba)` aprendidos por `(app_id, botones_derecha)`
     /// al cerrar ventanas CSD haciendo clic en su botón de cerrar.
     pub learned_close_button_offsets: HashMap<(String, bool), (f64, f64)>,
@@ -3202,22 +3221,110 @@ impl MalusState {
             is_fullscreen,
             self.ssd.buttons_right,
         );
-        self.close_button_hints
-            .insert(surf.into_owned(), (origin, Instant::now(), false));
+        self.close_button_hints.insert(
+            surf.into_owned(),
+            (origin, Instant::now(), BlackHoleCloseReason::CompositorClose),
+        );
+    }
+
+    /// Registra que el usuario pulsó `Escape` sobre la ventana activa para cancelar/descartar
+    /// un diálogo o ventana sin ejecutar acción.
+    pub fn record_escape_cancel_hint(&mut self) {
+        if let Some(win) = self.get_active_window() {
+            let Some(surf) = win.wl_surface() else {
+                return;
+            };
+            let Some(loc) = self.space.element_location(&win) else {
+                return;
+            };
+            let uses_ssd = window_uses_ssd(&win);
+            let is_fullscreen = win
+                .toplevel()
+                .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+                .unwrap_or(false);
+            let origin = self.close_button_center_logical(
+                &win,
+                loc,
+                uses_ssd,
+                is_fullscreen,
+                self.ssd.buttons_right,
+            );
+            self.close_button_hints.insert(
+                surf.into_owned(),
+                (origin, Instant::now(), BlackHoleCloseReason::CancelAction),
+            );
+        }
+    }
+
+    /// Limpia cualquier hint de cierre previo en la ventana activa (por ejemplo al pulsar `Enter`
+    /// para aceptar/confirmar un modal).
+    pub fn clear_close_hint_for_active_window(&mut self) {
+        if let Some(win) = self.get_active_window() {
+            if let Some(surf) = win.wl_surface() {
+                self.close_button_hints.remove(surf.as_ref());
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn is_in_csd_close_zone(rel_x: f64, rel_y: f64, win_w: f64) -> Option<bool> {
+        Self::is_in_csd_close_zone_for(rel_x, rel_y, win_w, false, false)
     }
 
     /// Determina si una coordenada relativa `(rel_x, rel_y)` dentro de una ventana CSD de ancho `win_w`
     /// cae dentro de la zona superior de botones de cierre (izquierda o derecha).
-    fn is_in_csd_close_zone(rel_x: f64, rel_y: f64, win_w: f64) -> Option<bool> {
+    fn is_in_csd_close_zone_for(
+        rel_x: f64,
+        rel_y: f64,
+        win_w: f64,
+        is_dialog: bool,
+        buttons_right: bool,
+    ) -> Option<bool> {
         if !(0.0..=56.0).contains(&rel_y) {
             return None;
         }
         let edge_span = 72.0_f64.min((win_w * 0.35).max(48.0));
-        if (0.0..=edge_span).contains(&rel_x) {
+        if (!is_dialog || !buttons_right) && (0.0..=edge_span).contains(&rel_x) {
             return Some(false);
         }
-        if win_w >= edge_span && rel_x >= (win_w - edge_span) && rel_x <= win_w {
+        if (!is_dialog || buttons_right)
+            && win_w >= edge_span
+            && rel_x >= (win_w - edge_span)
+            && rel_x <= win_w
+        {
             return Some(true);
+        }
+        None
+    }
+
+    /// Clasifica un clic sobre una ventana para determinar si corresponde al botón cerrar / cancelar
+    /// (habilitando el efecto Hoyo Negro) o a una acción de confirmación/contenido (sin efecto).
+    pub fn classify_window_click_close_reason(
+        rel_x: f64,
+        rel_y: f64,
+        win_w: f64,
+        win_h: f64,
+        uses_ssd: bool,
+        is_dialog: bool,
+        buttons_right: bool,
+    ) -> Option<BlackHoleCloseReason> {
+        if !uses_ssd
+            && Self::is_in_csd_close_zone_for(rel_x, rel_y, win_w, is_dialog, buttons_right)
+                .is_some()
+        {
+            return Some(BlackHoleCloseReason::CsdCloseClick);
+        }
+        if is_dialog && win_w >= 80.0 && win_h >= 60.0 {
+            let footer_top = (win_h - 84.0).max(win_h * 0.55);
+            if rel_y >= footer_top && rel_y <= win_h && rel_x >= 0.0 && rel_x < win_w * 0.50 {
+                return Some(BlackHoleCloseReason::CancelAction);
+            }
+            if !uses_ssd
+                && (0.0..=56.0).contains(&rel_y)
+                && (0.0..=(120.0_f64.min(win_w * 0.42))).contains(&rel_x)
+            {
+                return Some(BlackHoleCloseReason::CancelAction);
+            }
         }
         None
     }
@@ -3227,9 +3334,6 @@ impl MalusState {
         window: &smithay::desktop::Window,
         click_pt: Point<f64, Logical>,
     ) {
-        if window_uses_ssd(window) {
-            return;
-        }
         let Some(surf) = window.wl_surface() else {
             return;
         };
@@ -3237,11 +3341,26 @@ impl MalusState {
             return;
         };
         let geo = window.geometry();
+        let uses_ssd = window_uses_ssd(window);
+        let is_dialog = window.toplevel().is_some_and(|t| t.parent().is_some())
+            || (geo.size.w <= 680 && geo.size.h <= 460);
         let rel_x = click_pt.x - win_loc.x as f64;
         let rel_y = click_pt.y - win_loc.y as f64;
-        if Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64).is_some() {
+
+        if let Some(reason) = Self::classify_window_click_close_reason(
+            rel_x,
+            rel_y,
+            geo.size.w as f64,
+            geo.size.h as f64,
+            uses_ssd,
+            is_dialog,
+            self.ssd.buttons_right,
+        ) {
             self.close_button_hints
-                .insert(surf.into_owned(), (click_pt, Instant::now(), true));
+                .insert(surf.into_owned(), (click_pt, Instant::now(), reason));
+        } else {
+            // Clic en Aceptar / Guardar / Aplicar o contenido: invalidar cualquier hint previo.
+            self.close_button_hints.remove(surf.as_ref());
         }
     }
 
@@ -8714,86 +8833,96 @@ impl XdgShellHandler for MalusState {
                             .and_then(|k| k.current_focus())
                             .as_ref()
                             == Some(surf);
-                    let fallback_origin = self.close_button_center_logical(
-                        win,
-                        loc,
-                        uses_ssd,
-                        is_fullscreen,
-                        self.ssd.buttons_right,
-                    );
+                    let valid_close_origin =
+                        hint_entry.and_then(|(hint_pt, hint_at, reason)| {
+                            if hint_at.elapsed() <= reason.max_hint_age() {
+                                Some((hint_pt, reason))
+                            } else {
+                                None
+                            }
+                        });
 
-                    let (origin_logical, origin_source) =
-                        if let Some((hint_pt, hint_at, from_click)) = hint_entry {
-                            if hint_at.elapsed() < std::time::Duration::from_secs(5) {
-                                if from_click && !uses_ssd {
-                                    let rel_x = hint_pt.x - loc.x as f64;
-                                    let rel_y = hint_pt.y - loc.y as f64;
-                                    if let Some(is_right) =
-                                        Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64)
-                                    {
-                                        if let Some(app_id) = app_id_for_surface(surf) {
-                                            let key = app_id.trim().to_ascii_lowercase();
-                                            if !key.is_empty() {
-                                                let dx = if is_right {
-                                                    (geo.size.w as f64 - rel_x).clamp(4.0, 72.0)
-                                                } else {
-                                                    rel_x.clamp(4.0, 72.0)
-                                                };
-                                                let dy = rel_y.clamp(4.0, 56.0);
-                                                self.learned_close_button_offsets
-                                                    .insert((key, is_right), (dx, dy));
-                                            }
-                                        }
+                    if let Some((origin_logical, reason)) = valid_close_origin {
+                        if reason == BlackHoleCloseReason::CsdCloseClick && !uses_ssd {
+                            let rel_x = origin_logical.x - loc.x as f64;
+                            let rel_y = origin_logical.y - loc.y as f64;
+                            let is_dialog = win.toplevel().is_some_and(|t| t.parent().is_some())
+                                || (geo.size.w <= 680 && geo.size.h <= 460);
+                            if let Some(is_right) = Self::is_in_csd_close_zone_for(
+                                rel_x,
+                                rel_y,
+                                geo.size.w as f64,
+                                is_dialog,
+                                self.ssd.buttons_right,
+                            ) {
+                                if let Some(app_id) = app_id_for_surface(surf) {
+                                    let key = app_id.trim().to_ascii_lowercase();
+                                    if !key.is_empty() {
+                                        let dx = if is_right {
+                                            (geo.size.w as f64 - rel_x).clamp(4.0, 72.0)
+                                        } else {
+                                            rel_x.clamp(4.0, 72.0)
+                                        };
+                                        let dy = rel_y.clamp(4.0, 56.0);
+                                        self.learned_close_button_offsets
+                                            .insert((key, is_right), (dx, dy));
                                     }
                                 }
-                                (hint_pt, if from_click { "click" } else { "hint" })
-                            } else {
-                                (fallback_origin, "fallback-expired")
                             }
-                        } else {
-                            (fallback_origin, "fallback")
+                        }
+
+                        let origin_source = match reason {
+                            BlackHoleCloseReason::CompositorClose => "compositor-close",
+                            BlackHoleCloseReason::CsdCloseClick => "csd-close-click",
+                            BlackHoleCloseReason::CancelAction => "cancel",
                         };
 
-                    let cached_layers = self
-                        .cached_close_snapshots
-                        .remove(surf)
-                        .map(|(layers, _)| layers)
-                        .or_else(|| {
-                            self.renderer_context_id.clone().map(|ctx_id| {
-                                crate::black_hole::capture_surface_tree_snapshot(surf, ctx_id)
+                        let cached_layers = self
+                            .cached_close_snapshots
+                            .remove(surf)
+                            .map(|(layers, _)| layers)
+                            .or_else(|| {
+                                self.renderer_context_id.clone().map(|ctx_id| {
+                                    crate::black_hole::capture_surface_tree_snapshot(surf, ctx_id)
+                                })
                             })
-                        })
-                        .unwrap_or_default();
+                            .unwrap_or_default();
 
-                    tracing::info!(
-                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, origin=({:.1},{:.1}) [{}], loc=({},{}), cached_layers={})",
-                        window_title_for_ssd(win),
-                        geo.size.w,
-                        geo.size.h,
-                        origin_logical.x,
-                        origin_logical.y,
-                        origin_source,
-                        loc.x,
-                        loc.y,
-                        cached_layers.len()
-                    );
+                        tracing::info!(
+                            "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, origin=({:.1},{:.1}) [{}], loc=({},{}), cached_layers={})",
+                            window_title_for_ssd(win),
+                            geo.size.w,
+                            geo.size.h,
+                            origin_logical.x,
+                            origin_logical.y,
+                            origin_source,
+                            loc.x,
+                            loc.y,
+                            cached_layers.len()
+                        );
 
-                    self.pending_black_holes
-                        .push(crate::black_hole::PendingBlackHoleClose {
-                            surface: surf.clone(),
-                            geometry: geo,
-                            location: loc,
-                            origin_logical,
-                            uses_ssd,
-                            is_fullscreen,
-                            is_active,
-                            is_firefox: is_firefox_window(win),
-                            is_translucent: is_translucent_window(win),
-                            custom_corner_radius: None,
-                            blur_insets: (0, 0, 0, 0),
-                            title: window_title_for_ssd(win),
-                            cached_layers,
-                        });
+                        self.pending_black_holes
+                            .push(crate::black_hole::PendingBlackHoleClose {
+                                surface: surf.clone(),
+                                geometry: geo,
+                                location: loc,
+                                origin_logical,
+                                uses_ssd,
+                                is_fullscreen,
+                                is_active,
+                                is_firefox: is_firefox_window(win),
+                                is_translucent: is_translucent_window(win),
+                                custom_corner_radius: None,
+                                blur_insets: (0, 0, 0, 0),
+                                title: window_title_for_ssd(win),
+                                cached_layers,
+                            });
+                    } else {
+                        tracing::debug!(
+                            "🕳️ [BlackHole] Omitiendo efecto al cerrar '{}' (cierre por acción/aceptar sin botón cerrar/cancelar)",
+                            window_title_for_ssd(win)
+                        );
+                    }
                 }
             }
         }
@@ -11101,5 +11230,55 @@ mod tests {
             parsed,
             malus_de_common::ipc::IpcMessage::ToggleNotificationCenter
         ));
+    }
+
+    #[test]
+    fn black_hole_triggers_on_close_or_cancel_but_skips_accept_clicks() {
+        use super::{BlackHoleCloseReason, MalusState};
+
+        // Botón cerrar CSD (semáforo izquierdo) en ventana normal -> CsdCloseClick
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                20.0, 22.0, 900.0, 650.0, false, false, false
+            ),
+            Some(BlackHoleCloseReason::CsdCloseClick)
+        );
+        // Clic dentro del cuerpo de una ventana normal -> sin hoyo negro
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                450.0, 320.0, 900.0, 650.0, false, false, false
+            ),
+            None
+        );
+
+        // Modal/diálogo de 420x220 con botones a la izquierda:
+        // - Pie izquierdo ("Cancelar") -> CancelAction
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                110.0, 185.0, 420.0, 220.0, false, true, false
+            ),
+            Some(BlackHoleCloseReason::CancelAction)
+        );
+        // - Pie derecho ("Aceptar" / "Guardar") -> None (sin hoyo negro)
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                320.0, 185.0, 420.0, 220.0, false, true, false
+            ),
+            None
+        );
+        // - Esquina superior derecha de diálogo (botón "Abrir"/"Guardar" en HeaderBar con semáforo izq.) -> None
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                390.0, 24.0, 420.0, 220.0, false, true, false
+            ),
+            None
+        );
+        // - Esquina superior izquierda de diálogo ("Cancelar" o semáforo cerrar) -> CsdCloseClick
+        assert_eq!(
+            MalusState::classify_window_click_close_reason(
+                24.0, 24.0, 420.0, 220.0, false, true, false
+            ),
+            Some(BlackHoleCloseReason::CsdCloseClick)
+        );
     }
 }

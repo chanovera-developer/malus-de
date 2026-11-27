@@ -2831,6 +2831,17 @@ pub fn run_drm() -> Result<()> {
                                         }
                                     }
                                 }
+
+                                // Escape cancela/descarta un modal (permite Hoyo Negro); Enter/Espacio confirma acción (sin Hoyo Negro).
+                                if is_esc && !has_super && !has_alt && !has_ctrl {
+                                    state.record_escape_cancel_hint();
+                                } else if (is_return || sym == keysyms::KEY_space.into())
+                                    && !has_super
+                                    && !has_alt
+                                    && !has_ctrl
+                                {
+                                    state.clear_close_hint_for_active_window();
+                                }
                             } else {
                                 state.media_keys.handle_key_release(key);
                                 // Liberación de modificadores (Super/Alt) -> Commit de App Switcher
