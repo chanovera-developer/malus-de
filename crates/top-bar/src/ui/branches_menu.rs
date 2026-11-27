@@ -481,6 +481,7 @@ fn show_branches_settings_dialog() {
         header.append(&val_lbl);
 
         let scale = Scale::with_range(Orientation::Horizontal, min, max, step);
+        crate::ui::control_center::disable_scale_scroll(&scale);
         scale.set_value(value);
         scale.set_draw_value(false);
         scale.set_hexpand(true);

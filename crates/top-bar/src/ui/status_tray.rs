@@ -1388,6 +1388,7 @@ fn create_volume_tray_button() -> MenuButton {
     mute_btn.set_child(Some(&vol_low_icon));
 
     let volume_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    crate::ui::control_center::disable_scale_scroll(&volume_scale);
     volume_scale.set_value(75.0);
     volume_scale.set_draw_value(false);
     volume_scale.set_hexpand(true);

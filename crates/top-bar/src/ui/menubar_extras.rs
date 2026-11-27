@@ -316,6 +316,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
     disp_hdr.append(&Label::builder().label("Pantalla").css_classes(["cc-tile-title"]).hexpand(true).xalign(0.0).build());
     disp_hdr.append(&disp_pct_lbl);
     let disp_scale = Scale::with_range(Orientation::Horizontal, 5.0, 100.0, 1.0);
+    crate::ui::control_center::disable_scale_scroll(&disp_scale);
     disp_scale.set_draw_value(false);
     disp_scale.set_value(DisplaysConfig::load().brightness.clamp(5.0, 100.0));
     let disp_lock = Rc::new(Cell::new(false));
@@ -441,6 +442,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         let max_b = std::fs::read_to_string(dir.join("max_brightness")).ok().and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(100.0).max(1.0);
         let cur_b = std::fs::read_to_string(dir.join("brightness")).ok().and_then(|s| s.trim().parse::<f64>().ok()).unwrap_or(0.0);
         let ks = Scale::with_range(Orientation::Horizontal, 0.0, max_b, 1.0);
+        crate::ui::control_center::disable_scale_scroll(&ks);
         ks.set_draw_value(false);
         ks.set_value(cur_b.clamp(0.0, max_b));
         ks.connect_value_changed(move |sc| {

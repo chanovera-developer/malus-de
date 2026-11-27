@@ -1754,7 +1754,7 @@ window.cc-editor-window decoration {
 
 .cc-floating-stack {
     background: transparent;
-    padding: 4px 8px 8px 8px;
+    padding: 0px 8px 8px 8px;
 }
 
 .cc-main-floating {
@@ -1920,7 +1920,7 @@ window.cc-floating-window.light-mode .cc-glass-media-btn:hover {
     background: transparent;
     border: none;
     box-shadow: none;
-    padding: 10px 16px;
+    padding: 7px 12px;
 }
 
 .cc-glass-slider-icon {
@@ -2045,6 +2045,359 @@ window.cc-floating-window.light-mode .cc-glass-edit-label {
     border: none;
     box-shadow: none;
     padding: 12px 12px;
+}
+
+/* ======================================================== */
+/* Modo Claro para todas las subvistas del Centro de Control */
+/* ======================================================== */
+window.cc-floating-window.light-mode .cc-subview-header {
+    border-bottom-color: rgba(0, 0, 0, 0.08);
+}
+
+window.cc-floating-window.light-mode .cc-back-btn {
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-back-btn:hover {
+    background-color: rgba(0, 0, 0, 0.07);
+    color: #000000;
+}
+
+window.cc-floating-window.light-mode .cc-subview-title {
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-section-label {
+    color: rgba(29, 29, 31, 0.52);
+}
+
+window.cc-floating-window.light-mode .cc-refresh-btn {
+    color: rgba(29, 29, 31, 0.62);
+}
+
+window.cc-floating-window.light-mode .cc-refresh-btn:hover {
+    background-color: rgba(0, 0, 0, 0.07);
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-list-row {
+    background-color: rgba(0, 0, 0, 0.045);
+    border-color: rgba(0, 0, 0, 0.05);
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-list-row:hover {
+    background-color: rgba(0, 0, 0, 0.085);
+    border-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-list-row:hover label {
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-list-row-active {
+    background-color: alpha(@accent_bg_color, 0.16);
+    border-color: alpha(@accent_bg_color, 0.36);
+}
+
+window.cc-floating-window.light-mode .cc-list-row-active:hover {
+    background-color: alpha(@accent_bg_color, 0.22);
+}
+
+window.cc-floating-window.light-mode .cc-item-title,
+window.cc-floating-window.light-mode .cc-tile-title {
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-item-subtitle,
+window.cc-floating-window.light-mode .cc-tile-subtitle {
+    color: rgba(29, 29, 31, 0.62);
+}
+
+button.cc-footer-btn,
+window.cc-floating-window.light-mode button.cc-footer-btn {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    margin: 0;
+    padding: 2px 8px;
+    min-height: 20px;
+    border-radius: 7px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+window.cc-floating-window.light-mode button.cc-footer-btn,
+window.cc-floating-window.light-mode .cc-footer-btn {
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode button.cc-footer-btn:hover,
+window.cc-floating-window.light-mode .cc-footer-btn:hover {
+    background-color: rgba(0, 0, 0, 0.07);
+    color: #000000;
+}
+
+button.cc-footer-btn label,
+button.cc-footer-btn:hover label,
+window.cc-floating-window.light-mode button.cc-footer-btn label,
+window.cc-floating-window.light-mode button.cc-footer-btn:hover label {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+window.cc-floating-window.light-mode .cc-footer-btn:hover label {
+    color: #000000;
+}
+
+window.cc-floating-window.light-mode .cc-empty-label,
+window.cc-floating-window.light-mode .cc-airdrop-desc {
+    color: rgba(29, 29, 31, 0.58);
+}
+
+window.cc-floating-window.light-mode .cc-pill-btn {
+    background-color: rgba(0, 0, 0, 0.055);
+    border-color: rgba(0, 0, 0, 0.06);
+    color: #1d1d1f;
+}
+
+window.cc-floating-window.light-mode .cc-pill-btn:hover {
+    background-color: rgba(0, 0, 0, 0.10);
+    color: #000000;
+}
+
+window.cc-floating-window.light-mode .cc-pill-btn-active {
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+window.cc-floating-window.light-mode .cc-pill-btn-active label,
+.cc-pill-btn-active label {
+    background: transparent;
+    background-color: transparent;
+    color: @accent_fg_color;
+}
+
+/* ======================================================== */
+/* Subvista Pantalla estilo macOS Tahoe (Liquid Glass)      */
+/* ======================================================== */
+.cc-displays-subview {
+    padding: 0;
+}
+
+.cc-display-section {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 18px;
+    padding: 7px 9px;
+}
+
+window.cc-floating-window.light-mode .cc-display-section {
+    background-color: rgba(255, 255, 255, 0.36);
+    border-color: rgba(0, 0, 0, 0.06);
+}
+
+.cc-display-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #f4f4f5;
+}
+
+window.cc-floating-window.light-mode .cc-display-label {
+    color: #1d1d1f;
+}
+
+.cc-display-value {
+    font-size: 11px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: rgba(244, 244, 245, 0.68);
+}
+
+window.cc-floating-window.light-mode .cc-display-value {
+    color: rgba(29, 29, 31, 0.62);
+}
+
+button.cc-display-quick-tile {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 18px;
+    padding: 7px 4px 6px 4px;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+button.cc-display-quick-tile:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+window.cc-floating-window.light-mode button.cc-display-quick-tile {
+    background-color: rgba(255, 255, 255, 0.36);
+    border-color: rgba(0, 0, 0, 0.06);
+}
+
+window.cc-floating-window.light-mode button.cc-display-quick-tile:hover {
+    background-color: rgba(255, 255, 255, 0.54);
+}
+
+.cc-display-quick-circle {
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: 9999px;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #f4f4f5;
+    transition: background-color 140ms ease, color 140ms ease;
+}
+
+window.cc-floating-window.light-mode .cc-display-quick-circle {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+button.cc-display-quick-tile.cc-quick-active .cc-display-quick-circle,
+window.cc-floating-window.light-mode button.cc-display-quick-tile.cc-quick-active .cc-display-quick-circle {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+button.cc-display-quick-tile.cc-quick-warm .cc-display-quick-circle,
+window.cc-floating-window.light-mode button.cc-display-quick-tile.cc-quick-warm .cc-display-quick-circle {
+    background-color: #ff9f0a;
+    color: #ffffff;
+}
+
+.cc-display-quick-caption {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: rgba(244, 244, 245, 0.90);
+}
+
+window.cc-floating-window.light-mode .cc-display-quick-caption {
+    color: #1d1d1f;
+}
+
+button.cc-display-chip {
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    padding: 8px 9px;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+button.cc-display-chip:hover {
+    background-color: rgba(255, 255, 255, 0.11);
+}
+
+window.cc-floating-window.light-mode button.cc-display-chip {
+    background-color: rgba(0, 0, 0, 0.045);
+    border-color: rgba(0, 0, 0, 0.07);
+}
+
+window.cc-floating-window.light-mode button.cc-display-chip:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+button.cc-display-chip.cc-display-chip-primary,
+window.cc-floating-window.light-mode button.cc-display-chip.cc-display-chip-primary {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-color: alpha(@accent_bg_color, 0.55);
+}
+
+.cc-display-chip-badge {
+    font-size: 9.5px;
+    font-weight: 700;
+    color: @accent_bg_color;
+}
+
+button.cc-display-inline-btn {
+    background-color: rgba(255, 255, 255, 0.09);
+    border: none;
+    border-radius: 9999px;
+    padding: 3px 9px;
+    min-height: 22px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: rgba(244, 244, 245, 0.88);
+    transition: background-color 120ms ease;
+}
+
+button.cc-display-inline-btn:hover {
+    background-color: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+}
+
+window.cc-floating-window.light-mode button.cc-display-inline-btn {
+    background-color: rgba(0, 0, 0, 0.065);
+    color: rgba(29, 29, 31, 0.84);
+}
+
+window.cc-floating-window.light-mode button.cc-display-inline-btn:hover {
+    background-color: rgba(0, 0, 0, 0.11);
+    color: #000000;
+}
+
+.cc-segmented-group {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 10px;
+    padding: 2px;
+}
+
+window.cc-floating-window.light-mode .cc-segmented-group {
+    background-color: rgba(0, 0, 0, 0.065);
+}
+
+button.cc-segmented-btn {
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    padding: 4px 4px;
+    min-height: 24px;
+    min-width: 0;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: rgba(244, 244, 245, 0.78);
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+button.cc-segmented-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #ffffff;
+}
+
+window.cc-floating-window.light-mode button.cc-segmented-btn {
+    color: rgba(29, 29, 31, 0.74);
+}
+
+window.cc-floating-window.light-mode button.cc-segmented-btn:hover {
+    background-color: rgba(255, 255, 255, 0.45);
+    color: #1d1d1f;
+}
+
+button.cc-segmented-btn.cc-segmented-btn-active {
+    background-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+window.cc-floating-window.light-mode button.cc-segmented-btn.cc-segmented-btn-active {
+    background-color: rgba(255, 255, 255, 0.92);
+    color: #1d1d1f;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.10);
+}
+
+separator.cc-display-sep {
+    min-height: 1px;
+    background-color: rgba(255, 255, 255, 0.10);
+    margin: 2px 0;
+}
+
+window.cc-floating-window.light-mode separator.cc-display-sep {
+    background-color: rgba(0, 0, 0, 0.08);
 }
 
 /* Modo edición en Centro de Control: botón circular "−" y huecos circulares vacíos */

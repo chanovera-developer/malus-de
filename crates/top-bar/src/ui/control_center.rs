@@ -160,6 +160,7 @@ pub fn create_control_center_widget() -> ToggleButton {
         CC_RUNTIME.with(|cell| {
             if let Some(rt) = cell.borrow().as_ref() {
                 if active {
+                    sync_cc_top_margin(&rt.window);
                     (rt.refresh_all)();
                     rt.window.present();
                     (rt.sync_glass)();
@@ -186,9 +187,36 @@ pub fn create_control_center_widget() -> ToggleButton {
     toggle_btn
 }
 
-const CC_TILE_SQUIRCLE_RADIUS: f64 = 28.0;
-const CC_SUBVIEW_SQUIRCLE_RADIUS: f64 = 26.0;
+const CC_TILE_SQUIRCLE_RADIUS: f64 = 32.0;
+const CC_SUBVIEW_SQUIRCLE_RADIUS: f64 = 32.0;
 const CC_EDIT_BTN_SQUIRCLE_RADIUS: f64 = 13.0;
+
+/// Desactiva el cambio accidental por rueda de ratón o scroll de trackpad en un `GtkScale`,
+/// dejando que el desplazamiento fluya normalmente hacia cualquier `ScrolledWindow` padre.
+pub fn disable_scale_scroll(scale: &Scale) {
+    let controllers = scale.observe_controllers();
+    for idx in 0..controllers.n_items() {
+        if let Some(obj) = controllers.item(idx) {
+            if let Ok(scroll_ctrl) = obj.downcast::<gtk4::EventControllerScroll>() {
+                scroll_ctrl.set_propagation_phase(gtk4::PropagationPhase::None);
+            }
+        }
+    }
+}
+
+fn sync_cc_top_margin(cc_window: &Window) {
+    if !gtk4_layer_shell::is_supported() {
+        return;
+    }
+    let auto_hide = malus_de_common::config::MenuBarConfig::load().auto_hide_mode;
+    // Alinear el borde superior del Centro de Control exactamente con los popovers de Wi-Fi/Bluetooth/Sonido (y ≈ 36 px).
+    let top_margin = if auto_hide == 1 || auto_hide == 2 {
+        36
+    } else {
+        0
+    };
+    cc_window.set_margin(Edge::Top, top_margin);
+}
 
 fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Application>) {
     let mut win_builder = Window::builder()
@@ -210,13 +238,7 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         cc_window.set_namespace("malus-control-center");
         cc_window.set_anchor(Edge::Top, true);
         cc_window.set_anchor(Edge::Right, true);
-        let auto_hide = malus_de_common::config::MenuBarConfig::load().auto_hide_mode;
-        let top_margin = if auto_hide == 1 || auto_hide == 2 {
-            38
-        } else {
-            4
-        };
-        cc_window.set_margin(Edge::Top, top_margin);
+        sync_cc_top_margin(&cc_window);
         cc_window.set_margin(Edge::Right, 10);
         cc_window.set_keyboard_mode(KeyboardMode::OnDemand);
     }
@@ -316,6 +338,7 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         .build();
     link_btn.set_child(Some(&link_icon_label));
     let master_scale_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
+    disable_scale_scroll(&master_scale_slider);
     master_scale_slider.set_value((current_disp_cfg.master_scale * 100.0).clamp(100.0, 250.0));
     let scale_row_val = Label::builder()
         .label(&format!("{:.1}%", current_disp_cfg.master_scale * 100.0))
@@ -397,6 +420,11 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
 
     let (displays_subview, refresh_displays_subview) = create_displays_subview(
         &stack,
+        &cc_window,
+        &brightness_scale,
+        &disp_pct,
+        &is_updating_brightness,
+        &dark_btn,
         &monitors_info,
         &link_btn,
         &link_icon_label,
@@ -459,10 +487,14 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
     // ==========================================
     // Sincronización de regiones GPU Liquid Glass (refracción por cápsula)
     // ==========================================
+    let last_sent_glass: Rc<RefCell<Option<Vec<GlassRegion>>>> = Rc::new(RefCell::new(None));
+    let transition_ticker_active: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let sync_glass: Rc<dyn Fn()> = {
         let win_c = cc_window.clone();
         let stack_c = stack.clone();
         let targets_c = glass_targets.clone();
+        let last_sent_c = last_sent_glass.clone();
+        let ticker_c = transition_ticker_active.clone();
         let subview_cards: HashMap<&'static str, gtk4::Widget> = HashMap::from([
             ("wifi", wifi_card.clone().upcast()),
             ("bluetooth", bt_card.clone().upcast()),
@@ -473,66 +505,100 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         ]);
 
         let compute_and_send = Rc::new(move || {
-            if !win_c.is_visible() {
-                let _ = IpcClient::send_command(IpcMessage::SetControlCenterGlassRegions {
-                    regions: Vec::new(),
-                });
+            let mut regions = Vec::new();
+            if win_c.is_visible() {
+                let win_w = win_c.width();
+                let win_h = win_c.height();
+                let page = stack_c.visible_child_name();
+                if page.as_deref() == Some("main") {
+                    for (w, radius, is_capsule) in targets_c.borrow().iter() {
+                        if !w.is_visible() || !w.is_mapped() {
+                            continue;
+                        }
+                        if let Some(bounds) = w.compute_bounds(&win_c) {
+                            if let Some(region) = clip_glass_region_to_window(
+                                bounds.x(),
+                                bounds.y(),
+                                bounds.width(),
+                                bounds.height(),
+                                win_w,
+                                win_h,
+                                *radius,
+                                *is_capsule,
+                            ) {
+                                regions.push(region);
+                            }
+                        }
+                    }
+                } else if let Some(name) = page.as_deref() {
+                    if let Some(card) = subview_cards.get(name) {
+                        if let Some(bounds) = card.compute_bounds(&win_c) {
+                            if let Some(region) = clip_glass_region_to_window(
+                                bounds.x(),
+                                bounds.y(),
+                                bounds.width(),
+                                bounds.height(),
+                                win_w,
+                                win_h,
+                                CC_SUBVIEW_SQUIRCLE_RADIUS as f32,
+                                false,
+                            ) {
+                                regions.push(region);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let unchanged = last_sent_c
+                .borrow()
+                .as_ref()
+                .is_some_and(|prev| glass_regions_equal(prev, &regions));
+            if unchanged {
                 return;
             }
-            let page = stack_c.visible_child_name();
-            let mut regions = Vec::new();
-            if page.as_deref() == Some("main") {
-                for (w, radius, is_capsule) in targets_c.borrow().iter() {
-                    if !w.is_visible() || !w.is_mapped() {
-                        continue;
-                    }
-                    if let Some(bounds) = w.compute_bounds(&win_c) {
-                        let rw = bounds.width().round() as i32;
-                        let rh = bounds.height().round() as i32;
-                        if rw >= 8 && rh >= 8 {
-                            let r = if *is_capsule {
-                                (rh as f32 * 0.5).min(rw as f32 * 0.5)
-                            } else {
-                                *radius
-                            };
-                            regions.push(GlassRegion {
-                                x: bounds.x().round() as i32,
-                                y: bounds.y().round() as i32,
-                                width: rw,
-                                height: rh,
-                                radius: r,
-                                is_capsule: *is_capsule,
-                            });
-                        }
-                    }
-                }
-            } else if let Some(name) = page.as_deref() {
-                if let Some(card) = subview_cards.get(name) {
-                    if let Some(bounds) = card.compute_bounds(&win_c) {
-                        let rw = bounds.width().round() as i32;
-                        let rh = bounds.height().round() as i32;
-                        if rw >= 8 && rh >= 8 {
-                            regions.push(GlassRegion {
-                                x: bounds.x().round() as i32,
-                                y: bounds.y().round() as i32,
-                                width: rw,
-                                height: rh,
-                                radius: CC_SUBVIEW_SQUIRCLE_RADIUS as f32,
-                                is_capsule: false,
-                            });
-                        }
-                    }
-                }
-            }
+            *last_sent_c.borrow_mut() = Some(regions.clone());
             let _ = IpcClient::send_command(IpcMessage::SetControlCenterGlassRegions { regions });
         });
 
-        let send_now = compute_and_send.clone();
+        let send_now = compute_and_send;
+        let stack_sched = stack.clone();
+        let win_sched = cc_window.clone();
         Rc::new(move || {
             let s1 = send_now.clone();
             glib::idle_add_local_once(move || s1());
-            let s2 = send_now.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(45), move || s2());
+            for delay_ms in [45u64, 120, 240] {
+                let s = send_now.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(delay_ms), move || {
+                    s();
+                });
+            }
+
+            // Durante la transición SlideLeftRight / interpolate_size (200 ms), seguir el movimiento
+            // fotograma a fotograma y enviar la geometría definitiva al detenerse la transición.
+            if stack_sched.is_transition_running() && !ticker_c.get() {
+                ticker_c.set(true);
+                let s_tick = send_now.clone();
+                let st_tick = stack_sched.clone();
+                let w_tick = win_sched.clone();
+                let flag_tick = ticker_c.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+                    s_tick();
+                    if w_tick.is_visible() && st_tick.is_transition_running() {
+                        glib::ControlFlow::Continue
+                    } else {
+                        flag_tick.set(false);
+                        let s_post1 = s_tick.clone();
+                        glib::idle_add_local_once(move || s_post1());
+                        let s_post2 = s_tick.clone();
+                        glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(50),
+                            move || s_post2(),
+                        );
+                        glib::ControlFlow::Break
+                    }
+                });
+            }
         })
     };
 
@@ -1333,7 +1399,7 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         cc_window.add_controller(key_ctrl);
     }
 
-    // Actualizar regiones GPU al cambiar de página en el Stack o al ocultarse la ventana
+    // Actualizar regiones GPU al cambiar de página, durante/al finalizar la transición del Stack o al ocultarse
     {
         let sg = sync_glass.clone();
         stack.connect_visible_child_name_notify(move |_| {
@@ -1341,11 +1407,19 @@ fn build_control_center_overlay(toggle_btn: &ToggleButton, app: Option<&gtk4::Ap
         });
     }
     {
+        let sg = sync_glass.clone();
+        stack.connect_transition_running_notify(move |_| {
+            sg();
+        });
+    }
+    {
         let tgl_h = toggle_btn.clone();
+        let last_h = last_sent_glass;
         cc_window.connect_hide(move |_| {
             if tgl_h.is_active() {
                 tgl_h.set_active(false);
             }
+            *last_h.borrow_mut() = Some(Vec::new());
             let _ = IpcClient::send_command(IpcMessage::SetControlCenterGlassRegions {
                 regions: Vec::new(),
             });
@@ -1989,8 +2063,8 @@ fn create_tahoe_display_slider_pill(
         .orientation(Orientation::Vertical)
         .css_classes(["cc-glass-slider-pill"])
         .width_request(310)
-        .height_request(70)
-        .spacing(6)
+        .height_request(62)
+        .spacing(3)
         .valign(Align::Center)
         .build();
 
@@ -2026,6 +2100,7 @@ fn create_tahoe_display_slider_pill(
     low_ico.add_css_class("cc-glass-slider-icon");
 
     let scale = Scale::with_range(Orientation::Horizontal, 5.0, 100.0, 1.0);
+    disable_scale_scroll(&scale);
     scale.set_value(cfg.brightness.clamp(5.0, 100.0));
     scale.set_draw_value(false);
     scale.set_hexpand(true);
@@ -2061,8 +2136,8 @@ fn create_tahoe_sound_slider_pill() -> (
         .orientation(Orientation::Vertical)
         .css_classes(["cc-glass-slider-pill"])
         .width_request(310)
-        .height_request(70)
-        .spacing(6)
+        .height_request(62)
+        .spacing(3)
         .valign(Align::Center)
         .build();
 
@@ -2105,6 +2180,7 @@ fn create_tahoe_sound_slider_pill() -> (
     mute_btn.set_child(Some(&low_ico));
 
     let scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    disable_scale_scroll(&scale);
     scale.set_value(75.0);
     scale.set_draw_value(false);
     scale.set_hexpand(true);
@@ -4114,6 +4190,7 @@ pub(crate) fn build_per_app_mixer_row(
     mute_btn.set_child(Some(&mute_icon));
 
     let slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    disable_scale_scroll(&slider);
     slider.set_value(stream.volume_pct.clamp(0.0, 100.0));
     slider.set_draw_value(false);
     slider.set_hexpand(true);
@@ -4149,6 +4226,7 @@ pub(crate) fn build_per_app_mixer_row(
                 .width_request(58)
                 .build();
             let ch_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+            disable_scale_scroll(&ch_scale);
             ch_scale.set_value(ch_val.clamp(0.0, 100.0));
             ch_scale.set_draw_value(false);
             ch_scale.set_hexpand(true);
@@ -4719,8 +4797,14 @@ fn create_keyboard_card() -> (GtkBox, Rc<dyn Fn()>) {
 // Subvista 4: Disposición de Pantallas, Escalado Individual y Enlace 1:1 Pixel a Pixel
 // ==========================================
 
+#[allow(clippy::too_many_arguments)]
 fn create_displays_subview(
     stack: &Stack,
+    popover: &Window,
+    main_brightness_scale: &Scale,
+    main_disp_pct: &Label,
+    is_updating_brightness: &Rc<RefCell<bool>>,
+    main_dark_btn: &Button,
     main_monitors_info: &Label,
     main_link_btn: &Button,
     main_link_lbl: &Label,
@@ -4730,16 +4814,14 @@ fn create_displays_subview(
 ) -> (GtkBox, Rc<dyn Fn()>) {
     let subview = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(8)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .css_classes(["cc-subview", "cc-displays-subview"])
+        .spacing(7)
         .build();
 
-    // 1. Header con botón de retorno
+    // 1. Cabecera limpia estilo macOS Tahoe
     let header = GtkBox::builder()
         .orientation(Orientation::Horizontal)
+        .css_classes(["cc-subview-header"])
         .spacing(6)
         .build();
 
@@ -4748,515 +4830,814 @@ fn create_displays_subview(
         .has_frame(false)
         .tooltip_text("Volver al Centro de Control")
         .build();
-    let back_icon = Image::from_icon_name("go-previous-symbolic");
-    back_btn.set_child(Some(&back_icon));
+    back_btn.set_child(Some(&Image::from_icon_name("go-previous-symbolic")));
+    {
+        let stack_back = stack.clone();
+        back_btn.connect_clicked(move |_| {
+            stack_back.set_visible_child_name("main");
+        });
+    }
 
     let title_lbl = Label::builder()
-        .label("📐 Disposición y Escalas Dual 4K")
+        .label("Pantalla")
         .css_classes(["cc-subview-title"])
         .hexpand(true)
         .xalign(0.0)
         .build();
 
+    let count_lbl = Label::builder()
+        .label("1 pantalla")
+        .css_classes(["cc-display-value"])
+        .valign(Align::Center)
+        .build();
+
     header.append(&back_btn);
     header.append(&title_lbl);
+    header.append(&count_lbl);
     subview.append(&header);
 
-    let stack_back = stack.clone();
-    back_btn.connect_clicked(move |_| {
-        stack_back.set_visible_child_name("main");
-    });
-
-    // 2. Contenedor con scroll para todos los controles de disposición y escalado
+    // 2. Contenido desplazable acotado al ancho exacto del Centro de Control (sin saltos horizontales)
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
-        .min_content_height(360)
-        .max_content_height(460)
+        .max_content_height(430)
         .propagate_natural_height(true)
         .build();
 
     let content = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(8)
+        .spacing(7)
         .build();
 
-    // --- TARJETA A: DISPOSICIÓN FÍSICA DE PANTALLAS (ARRANGEMENT) ---
-    let arrange_card = GtkBox::builder()
+    // --- BLOQUE 1: BRILLO ESTILO APPLE ---
+    let bright_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
+        .css_classes(["cc-display-section"])
         .spacing(6)
         .build();
 
-    let arrange_title = Label::builder()
-        .label("🖥 Disposición de Pantallas (Orden y Alineación)")
-        .css_classes(["cc-tile-title"])
-        .xalign(0.0)
+    let bright_hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
         .build();
-    arrange_card.append(&arrange_title);
+    bright_hdr.append(
+        &Label::builder()
+            .label("Brillo")
+            .css_classes(["cc-display-label"])
+            .hexpand(true)
+            .xalign(0.0)
+            .build(),
+    );
+    let sub_bright_pct = Label::builder()
+        .label("80%")
+        .css_classes(["cc-display-value"])
+        .build();
+    bright_hdr.append(&sub_bright_pct);
 
-    // Representación visual lado a lado de Monitor Izquierdo y Monitor Derecho
-    let visual_monitors_row = GtkBox::builder()
+    let bright_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .valign(Align::Center)
+        .build();
+    bright_row.append(
+        &Image::builder()
+            .icon_name("display-brightness-low-symbolic")
+            .pixel_size(14)
+            .css_classes(["cc-glass-slider-icon"])
+            .build(),
+    );
+    let sub_bright_scale = Scale::with_range(Orientation::Horizontal, 5.0, 100.0, 1.0);
+    disable_scale_scroll(&sub_bright_scale);
+    sub_bright_scale.set_draw_value(false);
+    sub_bright_scale.set_hexpand(true);
+    sub_bright_scale.add_css_class("cc-tahoe-slider");
+    bright_row.append(&sub_bright_scale);
+    bright_row.append(
+        &Image::builder()
+            .icon_name("display-brightness-high-symbolic")
+            .pixel_size(16)
+            .css_classes(["cc-glass-slider-icon"])
+            .build(),
+    );
+
+    bright_section.append(&bright_hdr);
+    bright_section.append(&bright_row);
+    content.append(&bright_section);
+
+    // --- BLOQUE 2: MODOS RÁPIDOS ESTILO MACOS (Modo oscuro · Night Shift · TrueSize 1:1) ---
+    let make_quick_tile = |icon_name: &str, caption: &str, tooltip: &str| -> (Button, Label) {
+        let btn = Button::builder()
+            .css_classes(["cc-display-quick-tile"])
+            .has_frame(false)
+            .tooltip_text(tooltip)
+            .build();
+        let vbox = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(5)
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .build();
+        let circle = GtkBox::builder()
+            .css_classes(["cc-display-quick-circle"])
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .build();
+        circle.append(
+            &Image::builder()
+                .icon_name(icon_name)
+                .pixel_size(15)
+                .halign(Align::Center)
+                .valign(Align::Center)
+                .hexpand(true)
+                .vexpand(true)
+                .build(),
+        );
+        let lbl = Label::builder()
+            .label(caption)
+            .css_classes(["cc-display-quick-caption"])
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build();
+        vbox.append(&circle);
+        vbox.append(&lbl);
+        btn.set_child(Some(&vbox));
+        (btn, lbl)
+    };
+
+    let quick_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(8)
         .homogeneous(true)
         .build();
 
-    let left_mon_box = GtkBox::builder()
+    let (dark_tile_btn, _) = make_quick_tile(
+        "dark-mode-symbolic",
+        "Modo oscuro",
+        "Alternar entre aspecto claro y oscuro",
+    );
+    let (night_tile_btn, _) = make_quick_tile(
+        "night-light-symbolic",
+        "Night Shift",
+        "Activar o desactivar tono cálido nocturno",
+    );
+    let (truesize_tile_btn, _) = make_quick_tile(
+        "view-dual-symbolic",
+        "TrueSize 1:1",
+        "Enlazar escala física por densidad PPI entre ambos monitores",
+    );
+    quick_row.append(&dark_tile_btn);
+    quick_row.append(&night_tile_btn);
+    quick_row.append(&truesize_tile_btn);
+    content.append(&quick_row);
+
+    // --- BLOQUE 3: DISPOSICIÓN DE PANTALLAS (solo si hay ≥2 monitores) ---
+    let arrange_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-pill-btn", "cc-pill-btn-active"])
-        .spacing(2)
+        .css_classes(["cc-display-section"])
+        .spacing(8)
         .build();
-    let left_mon_title = Label::builder()
-        .label("⬅ Izquierda")
-        .css_classes(["cc-tile-title"])
-        .build();
-    let left_mon_sub = Label::builder()
-        .label("DP-1 · LG 27\"")
-        .css_classes(["cc-tile-subtitle"])
-        .wrap(true)
-        .build();
-    left_mon_box.append(&left_mon_title);
-    left_mon_box.append(&left_mon_sub);
 
-    let right_mon_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["cc-pill-btn"])
-        .spacing(2)
-        .build();
-    let right_mon_title = Label::builder()
-        .label("➡ Derecha")
-        .css_classes(["cc-tile-title"])
-        .build();
-    let right_mon_sub = Label::builder()
-        .label("HDMI-A-1 · Mi 24\"")
-        .css_classes(["cc-tile-subtitle"])
-        .wrap(true)
-        .build();
-    right_mon_box.append(&right_mon_title);
-    right_mon_box.append(&right_mon_sub);
-
-    visual_monitors_row.append(&left_mon_box);
-    visual_monitors_row.append(&right_mon_box);
-    arrange_card.append(&visual_monitors_row);
-
-    // Botones para Invertir Orden (Izquierda <-> Derecha) y Cambiar Principal
-    let order_actions_row = GtkBox::builder()
+    let arrange_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
-        .homogeneous(true)
         .build();
-
+    arrange_hdr.append(
+        &Label::builder()
+            .label("DISPOSICIÓN")
+            .css_classes(["cc-section-label"])
+            .hexpand(true)
+            .xalign(0.0)
+            .valign(Align::Center)
+            .build(),
+    );
     let swap_order_btn = Button::builder()
-        .css_classes(["cc-pill-btn", "cc-pill-btn-active"])
+        .css_classes(["cc-display-inline-btn"])
         .has_frame(false)
-        .tooltip_text("Intercambiar qué pantalla está a la izquierda y cuál a la derecha")
+        .tooltip_text("Intercambiar monitor izquierdo y derecho")
         .build();
-    swap_order_btn.set_child(Some(
-        &Label::builder()
-            .label("⇄ Invertir Izq / Der")
-            .css_classes(["cc-tile-subtitle"])
-            .build(),
-    ));
+    {
+        let r = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(4)
+            .build();
+        r.append(
+            &Image::builder()
+                .icon_name("object-flip-horizontal-symbolic")
+                .pixel_size(12)
+                .build(),
+        );
+        r.append(&Label::new(Some("Invertir")));
+        swap_order_btn.set_child(Some(&r));
+    }
+    arrange_hdr.append(&swap_order_btn);
+    arrange_section.append(&arrange_hdr);
 
-    let toggle_primary_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .has_frame(false)
-        .tooltip_text("Cambiar cuál monitor es el monitor principal (★)")
-        .build();
-    toggle_primary_btn.set_child(Some(
-        &Label::builder()
-            .label("★ Alternar Principal")
-            .css_classes(["cc-tile-subtitle"])
-            .build(),
-    ));
+    let make_monitor_chip = || -> (Button, Label, Label, Label) {
+        let btn = Button::builder()
+            .css_classes(["cc-display-chip"])
+            .has_frame(false)
+            .tooltip_text("Clic para establecer como pantalla principal")
+            .build();
+        let vbox = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .halign(Align::Fill)
+            .build();
+        let top = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(5)
+            .build();
+        top.append(
+            &Image::builder()
+                .icon_name("video-display-symbolic")
+                .pixel_size(14)
+                .css_classes(["cc-glass-slider-icon"])
+                .build(),
+        );
+        let name_lbl = Label::builder()
+            .css_classes(["cc-display-label"])
+            .hexpand(true)
+            .xalign(0.0)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build();
+        top.append(&name_lbl);
+        let res_lbl = Label::builder()
+            .css_classes(["cc-display-value"])
+            .xalign(0.0)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build();
+        let badge_lbl = Label::builder()
+            .css_classes(["cc-display-chip-badge"])
+            .xalign(0.0)
+            .build();
+        vbox.append(&top);
+        vbox.append(&res_lbl);
+        vbox.append(&badge_lbl);
+        btn.set_child(Some(&vbox));
+        (btn, name_lbl, res_lbl, badge_lbl)
+    };
 
-    order_actions_row.append(&swap_order_btn);
-    order_actions_row.append(&toggle_primary_btn);
-    arrange_card.append(&order_actions_row);
-
-    // Alineación Vertical (Top, Center, Bottom, Desk y=519)
-    let align_lbl = Label::builder()
-        .label("Alineación vertical entre monitores:")
-        .css_classes(["cc-tile-subtitle"])
-        .xalign(0.0)
-        .build();
-    arrange_card.append(&align_lbl);
-
-    let align_row = GtkBox::builder()
+    let chips_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(8)
         .homogeneous(true)
         .build();
+    let (left_chip_btn, left_chip_name, left_chip_res, left_chip_badge) = make_monitor_chip();
+    let (right_chip_btn, right_chip_name, right_chip_res, right_chip_badge) = make_monitor_chip();
+    chips_row.append(&left_chip_btn);
+    chips_row.append(&right_chip_btn);
+    arrange_section.append(&chips_row);
 
+    // Control segmentado de alineación vertical (Arriba · Centro · Abajo · Escritorio)
+    let align_seg = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-segmented-group"])
+        .spacing(2)
+        .homogeneous(true)
+        .build();
     let align_top_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("⬆ Arriba")
+        .label("Arriba")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
-        .tooltip_text("Alinear bordes superiores (y = 0)")
+        .tooltip_text("Alinear bordes superiores")
         .build();
     let align_center_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("⬌ Centro")
+        .label("Centro")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
-        .tooltip_text("Centrar verticalmente ambas pantallas")
+        .tooltip_text("Centrar verticalmente")
         .build();
     let align_bottom_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("⬇ Abajo")
+        .label("Abajo")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
         .tooltip_text("Alinear bordes inferiores")
         .build();
     let align_desk_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("🖥 Escritorio")
+        .label("Mesa")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
-        .tooltip_text("Alineación física de escritorio (Mi 24\" a y = +519 px)")
+        .tooltip_text("Alineación física de escritorio")
         .build();
+    align_seg.append(&align_top_btn);
+    align_seg.append(&align_center_btn);
+    align_seg.append(&align_bottom_btn);
+    align_seg.append(&align_desk_btn);
+    arrange_section.append(&align_seg);
 
-    align_row.append(&align_top_btn);
-    align_row.append(&align_center_btn);
-    align_row.append(&align_bottom_btn);
-    align_row.append(&align_desk_btn);
-    arrange_card.append(&align_row);
-
-    // Ajuste fino de altura vertical (offset Y de Monitor 2)
-    let fine_y_row = GtkBox::builder()
+    // Ajuste fino vertical compacto
+    let fine_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
-        .homogeneous(true)
+        .build();
+    let offset_lbl = Label::builder()
+        .label("Desplazamiento vertical: 0 px")
+        .css_classes(["cc-display-value"])
+        .hexpand(true)
+        .xalign(0.0)
         .build();
     let nudge_up_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("🔼 Subir M2 (-50px)")
+        .label("−50")
+        .css_classes(["cc-display-inline-btn"])
         .has_frame(false)
-        .tooltip_text("Subir posición vertical del segundo monitor en 50 píxeles")
+        .tooltip_text("Subir segundo monitor 50 px")
         .build();
     let nudge_down_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("🔽 Bajar M2 (+50px)")
+        .label("+50")
+        .css_classes(["cc-display-inline-btn"])
         .has_frame(false)
-        .tooltip_text("Bajar posición vertical del segundo monitor en 50 píxeles")
+        .tooltip_text("Bajar segundo monitor 50 px")
         .build();
-    fine_y_row.append(&nudge_up_btn);
-    fine_y_row.append(&nudge_down_btn);
-    arrange_card.append(&fine_y_row);
+    fine_row.append(&offset_lbl);
+    fine_row.append(&nudge_up_btn);
+    fine_row.append(&nudge_down_btn);
+    arrange_section.append(&fine_row);
+    content.append(&arrange_section);
 
-    content.append(&arrange_card);
-
-    // --- TARJETA B: BOTÓN DE ENLACE FÍSICO 1:1 PIXEL A PIXEL (TRUESIZE LINK) ---
-    let link_card = GtkBox::builder()
+    // --- BLOQUE 4: ESCALADO DE PANTALLAS ---
+    let scale_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
-        .spacing(6)
+        .css_classes(["cc-display-section"])
+        .spacing(8)
         .build();
 
-    let sub_link_btn = Button::builder()
-        .css_classes(["cc-pill-btn", "cc-pill-btn-active"])
-        .has_frame(false)
-        .tooltip_text("Enlaza ambas pantallas por densidad física (PPI) para que las ventanas midan exactamente los mismos milímetros al cruzar de un monitor a otro")
-        .build();
-    let sub_link_lbl = Label::builder()
-        .label("🔗 Enlazar Resolución 1:1 Pixel a Pixel (Activo)")
-        .css_classes(["cc-tile-title"])
-        .build();
-    sub_link_btn.set_child(Some(&sub_link_lbl));
-
-    let link_presets_row = GtkBox::builder()
+    let scale_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
+        .build();
+    scale_hdr.append(
+        &Label::builder()
+            .label("ESCALADO")
+            .css_classes(["cc-section-label"])
+            .hexpand(true)
+            .xalign(0.0)
+            .build(),
+    );
+    let link_status_lbl = Label::builder()
+        .label("TrueSize 1:1")
+        .css_classes(["cc-display-chip-badge"])
+        .build();
+    scale_hdr.append(&link_status_lbl);
+    scale_section.append(&scale_hdr);
+
+    // Selector segmentado de presets enlazados (visible en multi-monitor)
+    let linked_presets_seg = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-segmented-group"])
+        .spacing(2)
         .homogeneous(true)
         .build();
-
     let link_p1_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("Ajuste 1: 171% · 150%")
-        .tooltip_text("Ajuste 1: LG 24\" a 171% y Mi 27\" a 150% (Texto nítido / Óptimo)")
+        .label("Óptimo · 171 / 150%")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
+        .tooltip_text("Texto nítido 1:1 (171% y 150%)")
         .build();
-
     let link_p2_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
-        .label("Ajuste 2: 152.5% · 133.3%")
-        .tooltip_text("Ajuste 2: LG 24\" a 152.5% y Mi 27\" a 133.33% (Más espacio)")
+        .label("Espacio · 152 / 133%")
+        .css_classes(["cc-segmented-btn"])
         .has_frame(false)
+        .tooltip_text("Más espacio 1:1 (152.5% y 133.3%)")
         .build();
+    linked_presets_seg.append(&link_p1_btn);
+    linked_presets_seg.append(&link_p2_btn);
+    scale_section.append(&linked_presets_seg);
 
-    link_presets_row.append(&link_p1_btn);
-    link_presets_row.append(&link_p2_btn);
-
-    let link_desc_lbl = Label::builder()
-        .label("Relación física: 163.2 PPI (27\") ↔ 183.6 PPI (24\") · Factor 1.125x")
-        .css_classes(["cc-tile-subtitle"])
-        .xalign(0.0)
-        .wrap(true)
-        .build();
-
-    link_card.append(&sub_link_btn);
-    link_card.append(&link_presets_row);
-    link_card.append(&link_desc_lbl);
-    content.append(&link_card);
-
-    // --- TARJETA C: ESCALADO DE MONITOR 1 (DP-1 · LG Ultra HD 24") ---
-    let mon0_card = GtkBox::builder()
+    // Monitor 1
+    let mon0_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
-        .spacing(6)
+        .spacing(5)
         .build();
-
-    let mon0_header = GtkBox::builder()
+    let mon0_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
         .build();
     let mon0_title = Label::builder()
-        .label("Monitor 1: DP-1 (LG 24\" 4K)")
-        .css_classes(["cc-tile-title"])
+        .label("Pantalla 1")
+        .css_classes(["cc-display-label"])
         .hexpand(true)
         .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
     let mon0_val_lbl = Label::builder()
-        .label("171.0% · 2246×1263")
-        .css_classes(["cc-tile-subtitle"])
+        .label("171% · 2246×1263")
+        .css_classes(["cc-display-value"])
         .build();
-    mon0_header.append(&mon0_title);
-    mon0_header.append(&mon0_val_lbl);
+    mon0_hdr.append(&mon0_title);
+    mon0_hdr.append(&mon0_val_lbl);
 
     let mon0_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
+    disable_scale_scroll(&mon0_slider);
     mon0_slider.set_draw_value(false);
+    mon0_slider.add_css_class("cc-tahoe-slider");
 
     let mon0_presets = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .css_classes(["cc-segmented-group"])
+        .spacing(2)
         .homogeneous(true)
         .build();
-    for &(pct_label, _) in &[
+    let preset_scales_m0: [(&str, f64); 5] = [
         ("100%", 1.0),
         ("125%", 1.25),
-        ("152.5%", 1.525),
+        ("152%", 1.525),
         ("171%", 1.71),
         ("200%", 2.0),
-    ] {
+    ];
+    let mut mon0_preset_btns: Vec<(Button, f64)> = Vec::new();
+    for &(pct_label, val) in &preset_scales_m0 {
         let p_btn = Button::builder()
-            .css_classes(["cc-pill-btn"])
+            .css_classes(["cc-segmented-btn"])
             .label(pct_label)
             .has_frame(false)
             .build();
         mon0_presets.append(&p_btn);
+        mon0_preset_btns.push((p_btn, val));
     }
+    mon0_box.append(&mon0_hdr);
+    mon0_box.append(&mon0_slider);
+    mon0_box.append(&mon0_presets);
+    scale_section.append(&mon0_box);
 
-    mon0_card.append(&mon0_header);
-    mon0_card.append(&mon0_slider);
-    mon0_card.append(&mon0_presets);
-    content.append(&mon0_card);
-
-    // --- TARJETA D: ESCALADO DE MONITOR 2 (HDMI-A-1 · Mi Monitor 27") ---
-    let mon1_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
-        .spacing(6)
+    // Separador + Monitor 2
+    let mon1_sep = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-display-sep"])
         .build();
+    scale_section.append(&mon1_sep);
 
-    let mon1_header = GtkBox::builder()
+    let mon1_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(5)
+        .build();
+    let mon1_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
         .build();
     let mon1_title = Label::builder()
-        .label("Monitor 2: HDMI-A-1 (Mi 27\" 4K)")
-        .css_classes(["cc-tile-title"])
+        .label("Pantalla 2")
+        .css_classes(["cc-display-label"])
         .hexpand(true)
         .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
     let mon1_val_lbl = Label::builder()
-        .label("150.0% · 2560×1440")
-        .css_classes(["cc-tile-subtitle"])
+        .label("150% · 2560×1440")
+        .css_classes(["cc-display-value"])
         .build();
-    mon1_header.append(&mon1_title);
-    mon1_header.append(&mon1_val_lbl);
+    mon1_hdr.append(&mon1_title);
+    mon1_hdr.append(&mon1_val_lbl);
 
     let mon1_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
+    disable_scale_scroll(&mon1_slider);
     mon1_slider.set_draw_value(false);
+    mon1_slider.add_css_class("cc-tahoe-slider");
 
     let mon1_presets = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .css_classes(["cc-segmented-group"])
+        .spacing(2)
         .homogeneous(true)
         .build();
-    for &(pct_label, _) in &[
+    let preset_scales_m1: [(&str, f64); 5] = [
         ("100%", 1.0),
         ("125%", 1.25),
-        ("133.3%", 1.333333),
+        ("133%", 1.333333),
         ("150%", 1.5),
         ("200%", 2.0),
-    ] {
+    ];
+    let mut mon1_preset_btns: Vec<(Button, f64)> = Vec::new();
+    for &(pct_label, val) in &preset_scales_m1 {
         let p_btn = Button::builder()
-            .css_classes(["cc-pill-btn"])
+            .css_classes(["cc-segmented-btn"])
             .label(pct_label)
             .has_frame(false)
             .build();
         mon1_presets.append(&p_btn);
+        mon1_preset_btns.push((p_btn, val));
     }
+    mon1_box.append(&mon1_hdr);
+    mon1_box.append(&mon1_slider);
+    mon1_box.append(&mon1_presets);
+    scale_section.append(&mon1_box);
 
-    mon1_card.append(&mon1_header);
-    mon1_card.append(&mon1_slider);
-    mon1_card.append(&mon1_presets);
-    content.append(&mon1_card);
-
+    content.append(&scale_section);
     scrolled.set_child(Some(&content));
     subview.append(&scrolled);
 
-    // Estado de bloqueo para evitar recursión al sincronizar sliders
+    // 3. Pie estilo macOS: acceso directo a Ajustes > Pantallas
+    subview.append(
+        &Separator::builder()
+            .orientation(Orientation::Horizontal)
+            .css_classes(["cc-display-sep"])
+            .build(),
+    );
+    let open_settings_btn = Button::builder()
+        .label("Configuración de pantallas...")
+        .css_classes(["cc-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .valign(Align::Center)
+        .vexpand(false)
+        .build();
+    {
+        let pop_c = popover.clone();
+        open_settings_btn.connect_clicked(move |_| {
+            pop_c.set_visible(false);
+            let mut cmd = Command::new("malus-de-settings");
+            cmd.args(["--panel", "displays"]);
+            malus_de_common::config::set_cursor_environment(&mut cmd);
+            let _ = cmd.spawn();
+        });
+    }
+    subview.append(&open_settings_btn);
+
+    // Estado interno
     let is_syncing = Rc::new(RefCell::new(false));
+    let night_shift_active = Rc::new(Cell::new(false));
+    let left_output_idx = Rc::new(Cell::new(0usize));
+    let right_output_idx = Rc::new(Cell::new(1usize));
 
-    let l_title = left_mon_title.clone();
-    let l_sub = left_mon_sub.clone();
-    let r_title = right_mon_title.clone();
-    let r_sub = right_mon_sub.clone();
-    let r_box_c = right_mon_box.clone();
-    let o_row_c = order_actions_row.clone();
-    let a_lbl_c = align_lbl.clone();
-    let a_row_c = align_row.clone();
-    let fy_row_c = fine_y_row.clone();
-    let lk_card_c = link_card.clone();
-    let s_link_btn = sub_link_btn.clone();
-    let s_link_lbl = sub_link_lbl.clone();
-    let l_p1_btn = link_p1_btn.clone();
-    let l_p2_btn = link_p2_btn.clone();
-    let m0_title_c = mon0_title.clone();
-    let m0_val = mon0_val_lbl.clone();
-    let m0_sld = mon0_slider.clone();
-    let m1_title_c = mon1_title.clone();
-    let m1_card_c = mon1_card.clone();
-    let m1_val = mon1_val_lbl.clone();
-    let m1_sld = mon1_slider.clone();
-    let main_info_c = main_monitors_info.clone();
-    let main_l_btn_c = main_link_btn.clone();
-    let main_l_lbl_c = main_link_lbl.clone();
-    let main_ms_sld_c = main_master_slider.clone();
-    let main_ms_val_c = main_master_val_lbl.clone();
-    let is_upd_ms_c = is_updating_master_scale.clone();
-    let sync_lock = is_syncing.clone();
+    let refresh_ui: Rc<dyn Fn()> = {
+        let count_c = count_lbl.clone();
+        let sb_scale = sub_bright_scale.clone();
+        let sb_pct = sub_bright_pct.clone();
+        let dark_btn_c = dark_tile_btn.clone();
+        let night_btn_c = night_tile_btn.clone();
+        let night_flag_c = night_shift_active.clone();
+        let ts_btn_c = truesize_tile_btn.clone();
+        let arr_sec = arrange_section.clone();
+        let l_chip = left_chip_btn.clone();
+        let l_name = left_chip_name.clone();
+        let l_res = left_chip_res.clone();
+        let l_badge = left_chip_badge.clone();
+        let r_chip = right_chip_btn.clone();
+        let r_name = right_chip_name.clone();
+        let r_res = right_chip_res.clone();
+        let r_badge = right_chip_badge.clone();
+        let l_idx_cell = left_output_idx.clone();
+        let r_idx_cell = right_output_idx.clone();
+        let off_lbl = offset_lbl.clone();
+        let a_top = align_top_btn.clone();
+        let a_ctr = align_center_btn.clone();
+        let a_bot = align_bottom_btn.clone();
+        let a_dsk = align_desk_btn.clone();
+        let lk_status = link_status_lbl.clone();
+        let lk_seg = linked_presets_seg.clone();
+        let l_p1 = link_p1_btn.clone();
+        let l_p2 = link_p2_btn.clone();
+        let m0_t = mon0_title.clone();
+        let m0_v = mon0_val_lbl.clone();
+        let m0_s = mon0_slider.clone();
+        let m0_btns = mon0_preset_btns.clone();
+        let m1_sep_c = mon1_sep.clone();
+        let m1_box_c = mon1_box.clone();
+        let m1_t = mon1_title.clone();
+        let m1_v = mon1_val_lbl.clone();
+        let m1_s = mon1_slider.clone();
+        let m1_btns = mon1_preset_btns.clone();
+        let main_info_c = main_monitors_info.clone();
+        let main_l_btn_c = main_link_btn.clone();
+        let main_l_lbl_c = main_link_lbl.clone();
+        let main_ms_sld_c = main_master_slider.clone();
+        let main_ms_val_c = main_master_val_lbl.clone();
+        let is_upd_ms_c = is_updating_master_scale.clone();
+        let sync_lock = is_syncing.clone();
 
-    let refresh_ui: Rc<dyn Fn()> = Rc::new(move || {
-        let cfg = malus_de_common::config::DisplaysConfig::load();
-        *sync_lock.borrow_mut() = true;
+        Rc::new(move || {
+            let cfg = malus_de_common::config::DisplaysConfig::load();
+            *sync_lock.borrow_mut() = true;
 
-        let has_multi = cfg.outputs.len() > 1;
-        r_box_c.set_visible(has_multi);
-        o_row_c.set_visible(has_multi);
-        a_lbl_c.set_visible(has_multi);
-        a_row_c.set_visible(has_multi);
-        fy_row_c.set_visible(has_multi);
-        lk_card_c.set_visible(has_multi);
-        m1_card_c.set_visible(has_multi);
+            let n_outs = cfg.outputs.len().max(1);
+            let has_multi = cfg.outputs.len() > 1;
+            count_c.set_label(&if n_outs == 1 {
+                "1 pantalla".to_string()
+            } else {
+                format!("{n_outs} pantallas")
+            });
 
-        // Actualizar disposición visual (Izquierda vs Derecha)
-        let mut sorted: Vec<_> = cfg.outputs.iter().enumerate().collect();
-        sorted.sort_by_key(|(_, o)| o.x);
+            // Brillo actual
+            let b_val = cfg.brightness.clamp(5.0, 100.0);
+            sb_scale.set_value(b_val);
+            sb_pct.set_label(&format!("{}%", b_val.round() as i32));
 
-        if let Some((_, left_o)) = sorted.first() {
-            let (lw, lh) = left_o.logical_size();
-            l_title.set_label(&format!(
-                "{}{}",
-                if has_multi {
-                    format!("⬅ Izq: {}", left_o.connector)
+            // Estado visual de Modo Oscuro
+            if malus_de_common::config::is_dark_mode_active() {
+                dark_btn_c.add_css_class("cc-quick-active");
+            } else {
+                dark_btn_c.remove_css_class("cc-quick-active");
+            }
+
+            // Estado visual de Night Shift (consulta asíncrona sin bloquear UI)
+            {
+                let nb = night_btn_c.clone();
+                let nf = night_flag_c.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    let enabled = BrightnessService::get_night_shift().await;
+                    nf.set(enabled);
+                    if enabled {
+                        nb.add_css_class("cc-quick-warm");
+                    } else {
+                        nb.remove_css_class("cc-quick-warm");
+                    }
+                });
+            }
+
+            ts_btn_c.set_visible(has_multi);
+            arr_sec.set_visible(has_multi);
+            lk_seg.set_visible(has_multi);
+            m1_sep_c.set_visible(has_multi);
+            m1_box_c.set_visible(has_multi);
+
+            // Disposición visual izquierda / derecha
+            let mut sorted: Vec<_> = cfg.outputs.iter().enumerate().collect();
+            sorted.sort_by_key(|(_, o)| o.x);
+
+            if let Some(&(idx0, left_o)) = sorted.first() {
+                l_idx_cell.set(idx0);
+                let (lw, lh) = left_o.logical_size();
+                let display_name = if left_o.name.trim().is_empty() {
+                    left_o.connector.clone()
                 } else {
-                    format!("🖥 {}", left_o.connector)
-                },
-                if left_o.primary { " ★" } else { "" }
-            ));
-            l_sub.set_label(&format!(
-                "{}\n{}×{} @({}, {}) · {:.1}%",
-                left_o.name,
-                lw,
-                lh,
-                left_o.x,
-                left_o.y,
-                left_o.scale * 100.0
-            ));
-        }
-        if let Some((_, right_o)) = sorted.get(1) {
-            let (rw, rh) = right_o.logical_size();
-            r_title.set_label(&format!(
-                "➡ Der: {}{}",
-                right_o.connector,
-                if right_o.primary { " ★" } else { "" }
-            ));
-            r_sub.set_label(&format!(
-                "{}\n{}×{} @({}, {}) · {:.1}%",
-                right_o.name,
-                rw,
-                rh,
-                right_o.x,
-                right_o.y,
-                right_o.scale * 100.0
-            ));
-        }
+                    left_o.name.clone()
+                };
+                l_name.set_label(&display_name);
+                l_res.set_label(&format!("{}×{} · {:.0}%", lw, lh, left_o.scale * 100.0));
+                if left_o.primary {
+                    l_chip.add_css_class("cc-display-chip-primary");
+                    l_badge.set_label("Principal · Izquierda");
+                } else {
+                    l_chip.remove_css_class("cc-display-chip-primary");
+                    l_badge.set_label("Izquierda");
+                }
+            }
 
-        // Actualizar estado del botón de enlace 1:1 en subvista y tarjeta principal
-        if cfg.linked_physical_1to1 {
-            s_link_btn.add_css_class("cc-pill-btn-active");
-            s_link_lbl.set_label("🔗 Enlace 1:1 Pixel a Pixel: ACTIVO");
-            main_l_btn_c.add_css_class("cc-pill-btn-active");
-            main_l_lbl_c.set_label("🔗 TrueSize 1:1");
-        } else {
-            s_link_btn.remove_css_class("cc-pill-btn-active");
-            s_link_lbl.set_label("🔓 Escalas Independientes (Enlace 1:1 Inactivo)");
-            main_l_btn_c.remove_css_class("cc-pill-btn-active");
-            main_l_lbl_c.set_label("🔓 Escala Libre");
-        }
+            if let Some(&(idx1, right_o)) = sorted.get(1) {
+                r_idx_cell.set(idx1);
+                let (rw, rh) = right_o.logical_size();
+                let display_name = if right_o.name.trim().is_empty() {
+                    right_o.connector.clone()
+                } else {
+                    right_o.name.clone()
+                };
+                r_name.set_label(&display_name);
+                r_res.set_label(&format!("{}×{} · {:.0}%", rw, rh, right_o.scale * 100.0));
+                if right_o.primary {
+                    r_chip.add_css_class("cc-display-chip-primary");
+                    r_badge.set_label("Principal · Derecha");
+                } else {
+                    r_chip.remove_css_class("cc-display-chip-primary");
+                    r_badge.set_label("Derecha");
+                }
 
-        // Actualizar estado de los botones de Ajuste 1 y Ajuste 2
-        let curr_preset = cfg.current_linked_preset();
-        if curr_preset == Some(1) {
-            l_p1_btn.add_css_class("cc-pill-btn-active");
-            l_p2_btn.remove_css_class("cc-pill-btn-active");
-        } else if curr_preset == Some(2) {
-            l_p2_btn.add_css_class("cc-pill-btn-active");
-            l_p1_btn.remove_css_class("cc-pill-btn-active");
-        } else {
-            l_p1_btn.remove_css_class("cc-pill-btn-active");
-            l_p2_btn.remove_css_class("cc-pill-btn-active");
-        }
+                // Desplazamiento vertical y resaltado de alineación activa
+                let dy = right_o.y - sorted.first().map(|(_, o)| o.y).unwrap_or(0);
+                off_lbl.set_label(&format!("Desplazamiento vertical: {dy:+} px"));
+                let (_, lh) = sorted.first().map(|(_, o)| o.logical_size()).unwrap_or((0, 0));
+                let diff_h = lh - rh;
+                for b in [&a_top, &a_ctr, &a_bot, &a_dsk] {
+                    b.remove_css_class("cc-segmented-btn-active");
+                }
+                if dy == 0 {
+                    a_top.add_css_class("cc-segmented-btn-active");
+                } else if (dy - diff_h / 2).abs() <= 4 {
+                    a_ctr.add_css_class("cc-segmented-btn-active");
+                } else if (dy - diff_h).abs() <= 4 {
+                    a_bot.add_css_class("cc-segmented-btn-active");
+                } else if (dy - 519).abs() <= 8 {
+                    a_dsk.add_css_class("cc-segmented-btn-active");
+                }
+            }
 
-        // Actualizar Monitor 0
-        if let Some(o0) = cfg.outputs.first() {
-            let (w0, h0) = o0.logical_size();
-            let star0 = if o0.primary { " ★" } else { "" };
-            let mon0_name = if o0.name.trim().is_empty() {
-                o0.connector.clone()
+            // Estado TrueSize 1:1
+            if cfg.linked_physical_1to1 {
+                ts_btn_c.add_css_class("cc-quick-active");
+                lk_status.set_label("TrueSize 1:1");
+                lk_status.set_visible(has_multi);
+                main_l_btn_c.add_css_class("cc-pill-btn-active");
+                main_l_lbl_c.set_label("TrueSize 1:1");
             } else {
-                format!("{} ({})", o0.connector, o0.name)
-            };
-            m0_title_c.set_label(&format!("Monitor 1: {mon0_name}{star0}"));
-            m0_val.set_label(&format!("{:.1}% · {}×{}", o0.scale * 100.0, w0, h0));
-            m0_sld.set_value((o0.scale * 100.0).clamp(100.0, 250.0));
-        }
+                ts_btn_c.remove_css_class("cc-quick-active");
+                lk_status.set_label("Independiente");
+                lk_status.set_visible(has_multi);
+                main_l_btn_c.remove_css_class("cc-pill-btn-active");
+                main_l_lbl_c.set_label("Escala libre");
+            }
 
-        // Actualizar Monitor 1
-        if let Some(o1) = cfg.outputs.get(1) {
-            let (w1, h1) = o1.logical_size();
-            let star1 = if o1.primary { " ★" } else { "" };
-            let mon1_name = if o1.name.trim().is_empty() {
-                o1.connector.clone()
+            let curr_preset = cfg.current_linked_preset();
+            if curr_preset == Some(1) {
+                l_p1.add_css_class("cc-segmented-btn-active");
+                l_p2.remove_css_class("cc-segmented-btn-active");
+            } else if curr_preset == Some(2) {
+                l_p2.add_css_class("cc-segmented-btn-active");
+                l_p1.remove_css_class("cc-segmented-btn-active");
             } else {
-                format!("{} ({})", o1.connector, o1.name)
-            };
-            m1_title_c.set_label(&format!("Monitor 2: {mon1_name}{star1}"));
-            m1_val.set_label(&format!("{:.1}% · {}×{}", o1.scale * 100.0, w1, h1));
-            m1_sld.set_value((o1.scale * 100.0).clamp(100.0, 250.0));
-        }
+                l_p1.remove_css_class("cc-segmented-btn-active");
+                l_p2.remove_css_class("cc-segmented-btn-active");
+            }
 
-        // Actualizar tarjeta principal
-        *is_upd_ms_c.borrow_mut() = true;
-        main_ms_sld_c.set_value((cfg.master_scale * 100.0).clamp(100.0, 250.0));
-        *is_upd_ms_c.borrow_mut() = false;
-        main_ms_val_c.set_label(&format!("{:.1}%", cfg.master_scale * 100.0));
-        main_info_c.set_label(&format_monitors_summary(&cfg));
+            // Monitor 1
+            if let Some(o0) = cfg.outputs.first() {
+                let (w0, h0) = o0.logical_size();
+                let name = if o0.name.trim().is_empty() {
+                    o0.connector.clone()
+                } else {
+                    o0.name.clone()
+                };
+                m0_t.set_label(&name);
+                m0_v.set_label(&format!("{:.0}% · {}×{}", o0.scale * 100.0, w0, h0));
+                m0_s.set_value((o0.scale * 100.0).clamp(100.0, 250.0));
+                for (btn, target) in &m0_btns {
+                    if (o0.scale - *target).abs() < 0.02 {
+                        btn.add_css_class("cc-segmented-btn-active");
+                    } else {
+                        btn.remove_css_class("cc-segmented-btn-active");
+                    }
+                }
+            }
 
-        *sync_lock.borrow_mut() = false;
-    });
+            // Monitor 2
+            if let Some(o1) = cfg.outputs.get(1) {
+                let (w1, h1) = o1.logical_size();
+                let name = if o1.name.trim().is_empty() {
+                    o1.connector.clone()
+                } else {
+                    o1.name.clone()
+                };
+                m1_t.set_label(&name);
+                m1_v.set_label(&format!("{:.0}% · {}×{}", o1.scale * 100.0, w1, h1));
+                m1_s.set_value((o1.scale * 100.0).clamp(100.0, 250.0));
+                for (btn, target) in &m1_btns {
+                    if (o1.scale - *target).abs() < 0.02 {
+                        btn.add_css_class("cc-segmented-btn-active");
+                    } else {
+                        btn.remove_css_class("cc-segmented-btn-active");
+                    }
+                }
+            }
+
+            // Sincronizar tarjeta principal
+            *is_upd_ms_c.borrow_mut() = true;
+            main_ms_sld_c.set_value((cfg.master_scale * 100.0).clamp(100.0, 250.0));
+            *is_upd_ms_c.borrow_mut() = false;
+            main_ms_val_c.set_label(&format!("{:.1}%", cfg.master_scale * 100.0));
+            main_info_c.set_label(&format_monitors_summary(&cfg));
+
+            *sync_lock.borrow_mut() = false;
+        })
+    };
 
     refresh_ui();
+
+    // Sincronizar brillo desde la subvista hacia el sistema y el slider principal
+    {
+        let sync_b = is_syncing.clone();
+        let main_b_lock = is_updating_brightness.clone();
+        let main_b_scale = main_brightness_scale.clone();
+        let main_b_lbl = main_disp_pct.clone();
+        let sub_b_lbl = sub_bright_pct;
+        sub_bright_scale.connect_value_changed(move |sc| {
+            if *sync_b.borrow() {
+                return;
+            }
+            let val = sc.value().clamp(5.0, 100.0);
+            let txt = format!("{}%", val.round() as i32);
+            sub_b_lbl.set_label(&txt);
+            *main_b_lock.borrow_mut() = true;
+            main_b_scale.set_value(val);
+            main_b_lbl.set_label(&txt);
+            *main_b_lock.borrow_mut() = false;
+            BrightnessService::set_brightness(val);
+        });
+    }
+
+    // Modo oscuro rápido
+    {
+        let main_dark_c = main_dark_btn.clone();
+        let rf_c = refresh_ui.clone();
+        dark_tile_btn.connect_clicked(move |_| {
+            main_dark_c.emit_clicked();
+            let rf_later = rf_c.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                rf_later();
+            });
+        });
+    }
+
+    // Night Shift rápido
+    {
+        let nf = night_shift_active;
+        let nb = night_tile_btn.clone();
+        night_tile_btn.connect_clicked(move |_| {
+            let next = !nf.get();
+            nf.set(next);
+            BrightnessService::set_night_shift(next);
+            if next {
+                nb.add_css_class("cc-quick-warm");
+            } else {
+                nb.remove_css_class("cc-quick-warm");
+            }
+        });
+    }
 
     let ref_map = refresh_ui.clone();
     subview.connect_map(move |_| {
@@ -5292,7 +5673,6 @@ fn create_displays_subview(
         }
     }
 
-    // Helper para guardar cambios, notificar al compositor en vivo y refrescar la UI
     let apply_and_notify = |cfg: malus_de_common::config::DisplaysConfig, ref_fn: &Rc<dyn Fn()>| {
         let _ = cfg.save();
         let _ = malus_de_common::ipc::IpcClient::send_command(
@@ -5301,29 +5681,43 @@ fn create_displays_subview(
         ref_fn();
     };
 
-    // Conectar Invertir Orden (Izquierda <-> Derecha)
-    let ref_swap = refresh_ui.clone();
-    swap_order_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.swap_horizontal_order();
-        apply_and_notify(cfg, &ref_swap);
-    });
+    // Clic en tarjeta de monitor izquierdo o derecho -> marcar como principal
+    {
+        let ref_c = refresh_ui.clone();
+        let idx_c = left_output_idx;
+        left_chip_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            let target = idx_c.get();
+            if target < cfg.outputs.len() {
+                cfg.set_primary_output(target);
+                apply_and_notify(cfg, &ref_c);
+            }
+        });
+    }
+    {
+        let ref_c = refresh_ui.clone();
+        let idx_c = right_output_idx;
+        right_chip_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            let target = idx_c.get();
+            if target < cfg.outputs.len() {
+                cfg.set_primary_output(target);
+                apply_and_notify(cfg, &ref_c);
+            }
+        });
+    }
 
-    // Conectar Alternar Monitor Principal
-    let ref_prim = refresh_ui.clone();
-    toggle_primary_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        let current_primary = cfg.outputs.iter().position(|o| o.primary).unwrap_or(0);
-        let next_primary = if cfg.outputs.len() > 1 {
-            (current_primary + 1) % cfg.outputs.len()
-        } else {
-            0
-        };
-        cfg.set_primary_output(next_primary);
-        apply_and_notify(cfg, &ref_prim);
-    });
+    // Invertir orden izquierda <-> derecha
+    {
+        let ref_swap = refresh_ui.clone();
+        swap_order_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.swap_horizontal_order();
+            apply_and_notify(cfg, &ref_swap);
+        });
+    }
 
-    // Conectar botones de Alineación Vertical
+    // Alineación vertical
     for (btn, mode) in [
         (&align_top_btn, "top"),
         (&align_center_btn, "center"),
@@ -5339,118 +5733,190 @@ fn create_displays_subview(
         });
     }
 
-    // Conectar ajuste fino vertical (-50px / +50px)
-    let ref_up = refresh_ui.clone();
-    nudge_up_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        let target_idx = if cfg.outputs.len() > 1 { 1 } else { 0 };
-        cfg.adjust_vertical_offset(target_idx, -50);
-        apply_and_notify(cfg, &ref_up);
-    });
-
-    let ref_down = refresh_ui.clone();
-    nudge_down_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        let target_idx = if cfg.outputs.len() > 1 { 1 } else { 0 };
-        cfg.adjust_vertical_offset(target_idx, 50);
-        apply_and_notify(cfg, &ref_down);
-    });
-
-    // Conectar botones de Ajustes Predefinidos 1 y 2 en la subvista
-    let ref_lp1 = refresh_ui.clone();
-    link_p1_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.apply_linked_preset(1);
-        apply_and_notify(cfg, &ref_lp1);
-    });
-
-    let ref_lp2 = refresh_ui.clone();
-    link_p2_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.apply_linked_preset(2);
-        apply_and_notify(cfg, &ref_lp2);
-    });
-
-    // Conectar botón de Enlace Físico 1:1 en la subvista
-    let ref_link = refresh_ui.clone();
-    sub_link_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.linked_physical_1to1 = !cfg.linked_physical_1to1;
-        if cfg.linked_physical_1to1 {
-            if cfg.current_linked_preset().is_none() {
-                cfg.apply_linked_preset(1);
-            } else {
-                cfg.apply_1to1_link();
-            }
-        } else {
-            cfg.recalculate_layout();
-        }
-        apply_and_notify(cfg, &ref_link);
-    });
-
-    // Conectar Slider de Monitor 0 (DP-1)
-    let sync_m0 = is_syncing.clone();
-    let ref_m0 = refresh_ui.clone();
-    mon0_slider.connect_value_changed(move |sld| {
-        if *sync_m0.borrow() {
-            return;
-        }
-        let pct = (sld.value() / 2.5).round() * 2.5;
-        let new_scale = (pct / 100.0).clamp(0.5, 3.0);
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.set_output_scale_independent(0, new_scale);
-        apply_and_notify(cfg, &ref_m0);
-    });
-
-    // Conectar Presets de Monitor 0 (DP-1)
-    let preset_scales_m0 = [1.0, 1.25, 1.525, 1.71, 2.0];
-    let mut child_m0 = mon0_presets.first_child();
-    let mut idx_m0 = 0;
-    while let Some(w) = child_m0 {
-        if let Ok(btn) = w.clone().downcast::<Button>() {
-            let target_scale = preset_scales_m0.get(idx_m0).copied().unwrap_or(1.71);
-            let ref_p0 = refresh_ui.clone();
-            btn.connect_clicked(move |_| {
-                let mut cfg = malus_de_common::config::DisplaysConfig::load();
-                cfg.set_output_scale_independent(0, target_scale);
-                apply_and_notify(cfg, &ref_p0);
-            });
-            idx_m0 += 1;
-        }
-        child_m0 = w.next_sibling();
+    // Ajuste fino vertical (-50 / +50 px)
+    {
+        let ref_up = refresh_ui.clone();
+        nudge_up_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            let target_idx = if cfg.outputs.len() > 1 { 1 } else { 0 };
+            cfg.adjust_vertical_offset(target_idx, -50);
+            apply_and_notify(cfg, &ref_up);
+        });
+    }
+    {
+        let ref_down = refresh_ui.clone();
+        nudge_down_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            let target_idx = if cfg.outputs.len() > 1 { 1 } else { 0 };
+            cfg.adjust_vertical_offset(target_idx, 50);
+            apply_and_notify(cfg, &ref_down);
+        });
     }
 
-    // Conectar Slider de Monitor 1 (HDMI-A-1)
-    let sync_m1 = is_syncing.clone();
-    let ref_m1 = refresh_ui.clone();
-    mon1_slider.connect_value_changed(move |sld| {
-        if *sync_m1.borrow() {
-            return;
-        }
-        let pct = (sld.value() / 2.5).round() * 2.5;
-        let new_scale = (pct / 100.0).clamp(0.5, 3.0);
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.set_output_scale_independent(1, new_scale);
-        apply_and_notify(cfg, &ref_m1);
-    });
+    // TrueSize 1:1 toggle
+    {
+        let ref_link = refresh_ui.clone();
+        truesize_tile_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.linked_physical_1to1 = !cfg.linked_physical_1to1;
+            if cfg.linked_physical_1to1 {
+                if cfg.current_linked_preset().is_none() {
+                    cfg.apply_linked_preset(1);
+                } else {
+                    cfg.apply_1to1_link();
+                }
+            } else {
+                cfg.recalculate_layout();
+            }
+            apply_and_notify(cfg, &ref_link);
+        });
+    }
 
-    // Conectar Presets de Monitor 1 (HDMI-A-1)
-    let preset_scales_m1 = [1.0, 1.25, 1.333333, 1.5, 2.0];
-    let mut child_m1 = mon1_presets.first_child();
-    let mut idx_m1 = 0;
-    while let Some(w) = child_m1 {
-        if let Ok(btn) = w.clone().downcast::<Button>() {
-            let target_scale = preset_scales_m1.get(idx_m1).copied().unwrap_or(1.6875);
-            let ref_p1 = refresh_ui.clone();
-            btn.connect_clicked(move |_| {
-                let mut cfg = malus_de_common::config::DisplaysConfig::load();
-                cfg.set_output_scale_independent(1, target_scale);
-                apply_and_notify(cfg, &ref_p1);
-            });
-            idx_m1 += 1;
-        }
-        child_m1 = w.next_sibling();
+    // Presets enlazados 1 y 2
+    {
+        let ref_lp1 = refresh_ui.clone();
+        link_p1_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.apply_linked_preset(1);
+            apply_and_notify(cfg, &ref_lp1);
+        });
+    }
+    {
+        let ref_lp2 = refresh_ui.clone();
+        link_p2_btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.apply_linked_preset(2);
+            apply_and_notify(cfg, &ref_lp2);
+        });
+    }
+
+    // Monitor 1 slider & presets
+    {
+        let sync_m0 = is_syncing.clone();
+        let ref_m0 = refresh_ui.clone();
+        mon0_slider.connect_value_changed(move |sld| {
+            if *sync_m0.borrow() {
+                return;
+            }
+            let pct = (sld.value() / 2.5).round() * 2.5;
+            let new_scale = (pct / 100.0).clamp(0.5, 3.0);
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.set_output_scale_independent(0, new_scale);
+            apply_and_notify(cfg, &ref_m0);
+        });
+    }
+    for (btn, target_scale) in mon0_preset_btns {
+        let ref_p0 = refresh_ui.clone();
+        btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.set_output_scale_independent(0, target_scale);
+            apply_and_notify(cfg, &ref_p0);
+        });
+    }
+
+    // Monitor 2 slider & presets
+    {
+        let sync_m1 = is_syncing.clone();
+        let ref_m1 = refresh_ui.clone();
+        mon1_slider.connect_value_changed(move |sld| {
+            if *sync_m1.borrow() {
+                return;
+            }
+            let pct = (sld.value() / 2.5).round() * 2.5;
+            let new_scale = (pct / 100.0).clamp(0.5, 3.0);
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.set_output_scale_independent(1, new_scale);
+            apply_and_notify(cfg, &ref_m1);
+        });
+    }
+    for (btn, target_scale) in mon1_preset_btns {
+        let ref_p1 = refresh_ui.clone();
+        btn.connect_clicked(move |_| {
+            let mut cfg = malus_de_common::config::DisplaysConfig::load();
+            cfg.set_output_scale_independent(1, target_scale);
+            apply_and_notify(cfg, &ref_p1);
+        });
     }
 
     (subview, refresh_ui)
+}
+
+fn clip_glass_region_to_window(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    win_w: i32,
+    win_h: i32,
+    radius: f32,
+    is_capsule: bool,
+) -> Option<GlassRegion> {
+    let mut x0 = x.round() as i32;
+    let mut y0 = y.round() as i32;
+    let mut x1 = (x + w).round() as i32;
+    let mut y1 = (y + h).round() as i32;
+
+    if win_w > 0 && win_h > 0 {
+        x0 = x0.clamp(0, win_w);
+        y0 = y0.clamp(0, win_h);
+        x1 = x1.clamp(0, win_w);
+        y1 = y1.clamp(0, win_h);
+    }
+
+    let rw = x1 - x0;
+    let rh = y1 - y0;
+    if rw < 8 || rh < 8 {
+        return None;
+    }
+
+    let r = if is_capsule {
+        (rh as f32 * 0.5).min(rw as f32 * 0.5)
+    } else {
+        radius
+    };
+
+    Some(GlassRegion {
+        x: x0,
+        y: y0,
+        width: rw,
+        height: rh,
+        radius: r,
+        is_capsule,
+    })
+}
+
+fn glass_regions_equal(a: &[GlassRegion], b: &[GlassRegion]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b.iter()).all(|(lhs, rhs)| {
+            lhs.x == rhs.x
+                && lhs.y == rhs.y
+                && lhs.width == rhs.width
+                && lhs.height == rhs.height
+                && (lhs.radius - rhs.radius).abs() < 0.05
+                && lhs.is_capsule == rhs.is_capsule
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clips_sliding_glass_regions_to_window_and_deduplicates_cleanly() {
+        // Región parcialmente deslizada fuera del borde izquierdo durante SlideLeftRight
+        let clipped = clip_glass_region_to_window(-40.0, 12.0, 150.0, 70.0, 340, 480, 26.0, false)
+            .expect("debe recortar la porción visible");
+        assert_eq!(clipped.x, 0);
+        assert_eq!(clipped.y, 12);
+        assert_eq!(clipped.width, 110);
+        assert_eq!(clipped.height, 70);
+
+        // Región completamente fuera de la ventana -> descartada
+        assert!(clip_glass_region_to_window(-200.0, 12.0, 150.0, 70.0, 340, 480, 26.0, false).is_none());
+
+        // Deduplicación exacta
+        let a = vec![clipped.clone()];
+        let b = vec![clipped];
+        assert!(glass_regions_equal(&a, &b));
+    }
 }

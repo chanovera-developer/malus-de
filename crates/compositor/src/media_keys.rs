@@ -39,7 +39,8 @@ pub const REPEAT_INTERVAL: Duration = Duration::from_millis(65);
 pub const OSD_WIDTH: i32 = 264;
 pub const OSD_HEIGHT: i32 = 56;
 pub const OSD_CORNER_RADIUS: f64 = 28.0;
-pub const NOTIFICATION_CORNER_RADIUS: f64 = 38.0;
+pub const NOTIFICATION_CORNER_RADIUS: f64 = 44.0;
+pub const NOTIFICATION_CORNER_EXPONENT: f64 = 2.4;
 pub const OSD_SEGMENTS: usize = 16;
 const SQUIRCLE_EXPONENT: f64 = 4.2;
 

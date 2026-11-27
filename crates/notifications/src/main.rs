@@ -6,9 +6,9 @@ use glib::ControlFlow;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, ContentFit, CssProvider,
-    DrawingArea, EventControllerKey, EventControllerMotion, GestureClick, Image, Label,
-    Orientation, Overlay, Picture, PolicyType, ScrolledWindow,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
+    EventControllerKey, EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay,
+    PolicyType, ScrolledWindow,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use history::{
@@ -33,10 +33,11 @@ use zbus::zvariant::Value;
 static NOTIFICATION_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 // 8 px de margen superior/izquierdo reservados para el botón circular ✕ que sobresale de la esquina.
-// El radio squircle (38 px, n=4.2) coincide exactamente con `NOTIFICATION_CORNER_RADIUS` del compositor.
+// El radio (44 px) y exponente (2.4) coinciden exactamente con `NOTIFICATION_CORNER_RADIUS` / `NOTIFICATION_CORNER_EXPONENT` del compositor.
 const CLOSE_OVERHANG_PX: i32 = 8;
-const CARD_SQUIRCLE_RADIUS: f64 = 38.0;
-const CENTER_SQUIRCLE_RADIUS: f64 = 34.0;
+const CARD_SQUIRCLE_RADIUS: f64 = 44.0;
+const CARD_SQUIRCLE_EXPONENT: f64 = 2.4;
+const CENTER_SQUIRCLE_RADIUS: f64 = 38.0;
 const SQUIRCLE_EXPONENT: f64 = 4.2;
 
 const BANNER_TOP_BASE: i32 = 34;
@@ -108,6 +109,18 @@ enum DbusSignalCmd {
 }
 
 fn squircle_path(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
+    squircle_path_with_exponent(cr, x, y, w, h, radius, SQUIRCLE_EXPONENT);
+}
+
+fn squircle_path_with_exponent(
+    cr: &gtk4::cairo::Context,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    radius: f64,
+    exponent: f64,
+) {
     let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
     if r <= 0.5 {
         cr.rectangle(x, y, w, h);
@@ -115,7 +128,7 @@ fn squircle_path(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, radi
     }
 
     let steps = 18usize;
-    let inv_n = 1.0 / SQUIRCLE_EXPONENT;
+    let inv_n = 1.0 / exponent;
     let corners = [
         (x + w - r, y + r, 1.0, -1.0, false),
         (x + w - r, y + h - r, 1.0, 1.0, true),
@@ -1204,16 +1217,21 @@ fn main() -> Result<()> {
 }
 
 fn resolve_notification_icon(app_icon: &str, app_name: &str, pixel_size: i32) -> Image {
+    let icon_from_path = |path: std::path::PathBuf| -> Image {
+        let file = gio::File::for_path(path);
+        let gicon = gio::FileIcon::new(&file);
+        Image::from_gicon(&gicon)
+    };
     let img = if !app_icon.is_empty() {
         if let Some(path) = malus_de_common::apps::resolve_icon_file_path(app_icon) {
-            Image::from_file(path)
+            icon_from_path(path)
         } else {
             Image::from_icon_name(app_icon)
         }
     } else if !app_name.is_empty() {
         let lower = app_name.trim().to_ascii_lowercase();
         if let Some(path) = malus_de_common::apps::resolve_icon_file_path(&lower) {
-            Image::from_file(path)
+            icon_from_path(path)
         } else {
             Image::from_icon_name("preferences-system-notifications-symbolic")
         }
@@ -1221,18 +1239,20 @@ fn resolve_notification_icon(app_icon: &str, app_name: &str, pixel_size: i32) ->
         Image::from_icon_name("preferences-system-notifications-symbolic")
     };
     img.set_pixel_size(pixel_size);
+    img.set_size_request(pixel_size, pixel_size);
+    img.set_halign(Align::Center);
     img.set_valign(Align::Center);
     img.add_css_class("notif-app-icon");
     img
 }
 
-fn build_thumbnail_widget(image: &NotificationImage) -> Option<GtkBox> {
-    let picture = match image {
+fn build_thumbnail_widget(image: &NotificationImage) -> Option<DrawingArea> {
+    let pixbuf = match image {
         NotificationImage::Path(path) => {
             if !path.is_file() {
                 return None;
             }
-            Picture::for_filename(path)
+            gtk4::gdk_pixbuf::Pixbuf::from_file_at_scale(path, 96, 96, true).ok()?
         }
         NotificationImage::RawRgba {
             width,
@@ -1241,27 +1261,53 @@ fn build_thumbnail_widget(image: &NotificationImage) -> Option<GtkBox> {
             has_alpha,
             data,
         } => {
-            let format = if *has_alpha {
-                gdk::MemoryFormat::R8g8b8a8
-            } else {
-                gdk::MemoryFormat::R8g8b8
-            };
             let bytes = glib::Bytes::from(data);
-            let texture = gdk::MemoryTexture::new(*width, *height, format, &bytes, *rowstride as usize);
-            Picture::for_paintable(&texture)
+            gtk4::gdk_pixbuf::Pixbuf::from_bytes(
+                &bytes,
+                gtk4::gdk_pixbuf::Colorspace::Rgb,
+                *has_alpha,
+                8,
+                *width,
+                *height,
+                *rowstride,
+            )
         }
     };
-    picture.set_content_fit(ContentFit::Cover);
-    picture.set_size_request(44, 44);
-    let frame = GtkBox::builder()
-        .css_classes(["notif-thumb-frame"])
+    let pw = pixbuf.width() as f64;
+    let ph = pixbuf.height() as f64;
+    if pw <= 0.0 || ph <= 0.0 {
+        return None;
+    }
+
+    let area = DrawingArea::builder()
+        .content_width(44)
+        .content_height(44)
         .halign(Align::End)
         .valign(Align::Center)
-        .overflow(gtk4::Overflow::Hidden)
+        .hexpand(false)
+        .vexpand(false)
         .build();
-    frame.set_size_request(44, 44);
-    frame.append(&picture);
-    Some(frame)
+    area.set_size_request(44, 44);
+    area.set_draw_func(move |_, cr, w, h| {
+        let wf = w as f64;
+        let hf = h as f64;
+        if wf <= 1.0 || hf <= 1.0 {
+            return;
+        }
+        let scale = (wf / pw).max(hf / ph);
+        let draw_w = pw * scale;
+        let draw_h = ph * scale;
+        let ox = (wf - draw_w) * 0.5;
+        let oy = (hf - draw_h) * 0.5;
+
+        squircle_path(cr, 0.0, 0.0, wf, hf, 10.0);
+        cr.clip();
+        cr.translate(ox, oy);
+        cr.scale(scale, scale);
+        cr.set_source_pixbuf(&pixbuf, 0.0, 0.0);
+        let _ = cr.paint();
+    });
+    Some(area)
 }
 
 /// Dibuja en Cairo el fondo squircle (`n = 4.2`, `r = 38`) y, cuando `stacked_count > 1`,
@@ -1295,13 +1341,14 @@ fn build_squircle_bg(stacked_count: usize) -> DrawingArea {
             let inset_x = depth as f64 * 8.0;
             let offset_y = depth as f64 * 5.0;
             if cw > inset_x * 2.0 + 16.0 {
-                squircle_path(
+                squircle_path_with_exponent(
                     cr,
                     cx + inset_x,
                     cy + offset_y,
                     cw - inset_x * 2.0,
                     ch,
-                    (CARD_SQUIRCLE_RADIUS - depth as f64 * 4.0).max(18.0),
+                    (CARD_SQUIRCLE_RADIUS - depth as f64 * 4.0).max(20.0),
+                    CARD_SQUIRCLE_EXPONENT,
                 );
                 let factor = if depth == 2 { 0.42 } else { 0.64 };
                 if dark {
@@ -1325,7 +1372,15 @@ fn build_squircle_bg(stacked_count: usize) -> DrawingArea {
             }
         }
 
-        squircle_path(cr, cx, cy, cw, ch, CARD_SQUIRCLE_RADIUS);
+        squircle_path_with_exponent(
+            cr,
+            cx,
+            cy,
+            cw,
+            ch,
+            CARD_SQUIRCLE_RADIUS,
+            CARD_SQUIRCLE_EXPONENT,
+        );
         if dark {
             let bg_a = malus_de_common::config::scaled_liquid_glass_alpha(0.66, scale, 0.24, 0.96);
             cr.set_source_rgba(34.0 / 255.0, 36.0 / 255.0, 44.0 / 255.0, bg_a);
@@ -2218,7 +2273,8 @@ mod tests {
 
     #[test]
     fn squircle_radius_and_damped_slide_animation_converge_smoothly() {
-        assert!((CARD_SQUIRCLE_RADIUS - 38.0).abs() < f64::EPSILON);
+        assert!((CARD_SQUIRCLE_RADIUS - 44.0).abs() < f64::EPSILON);
+        assert!((CARD_SQUIRCLE_EXPONENT - 2.4).abs() < f64::EPSILON);
 
         let mut x = BANNER_OFFSCREEN_START_RIGHT;
         let target = BANNER_RIGHT_MARGIN as f64;

@@ -6,7 +6,7 @@ window.malus-notification-window {
     background-color: transparent;
     border: none;
     box-shadow: none;
-    padding: 13px 16px 13px 14px;
+    padding: 14px 18px 14px 16px;
     min-width: 344px;
 }
 
@@ -121,8 +121,8 @@ button.notif-center-clear-btn {
 }
 
 .notif-center-group-card {
-    border-radius: 20px;
-    padding: 12px 13px;
+    border-radius: 26px;
+    padding: 12px 14px;
 }
 
 .notif-center-group-app {

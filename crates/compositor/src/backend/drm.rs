@@ -6805,9 +6805,11 @@ pub fn run_drm() -> Result<()> {
                                                 let radius = match ns.as_ref() {
                                                     "malus-dock" => dock_radius * scale as f32,
                                                     "malus-app-switcher" => 32.0 * scale as f32,
-                                                    "malus-control-center-editor"
-                                                    | "malus-notification-center" => {
+                                                    "malus-control-center-editor" => {
                                                         34.0 * scale as f32
+                                                    }
+                                                    "malus-notification-center" => {
+                                                        38.0 * scale as f32
                                                     }
                                                     "malus-spotlight-controls"
                                                     | "malus-spotlight-input"
@@ -6986,11 +6988,12 @@ pub fn run_drm() -> Result<()> {
                                                     }
                                                 } else if shadow_kind == 1 {
                                                     if let Some(shadow) = shadow_pipeline.as_ref() {
-                                                        shadow.render_menu_shadow_alpha(
+                                                        shadow.render_menu_shadow_alpha_with_exponent(
                                                             gl,
                                                             &projection,
                                                             phys_rect,
                                                             radius,
+                                                            crate::media_keys::NOTIFICATION_CORNER_EXPONENT as f32,
                                                             scale,
                                                             1.0,
                                                         );
@@ -7003,6 +7006,16 @@ pub fn run_drm() -> Result<()> {
                                                         screen_size,
                                                         phys_rect,
                                                         radius,
+                                                    );
+                                                } else if shadow_kind == 1 {
+                                                    blur.render_blur_with_exponent(
+                                                        gl,
+                                                        &projection,
+                                                        screen_size,
+                                                        phys_rect,
+                                                        radius,
+                                                        crate::media_keys::NOTIFICATION_CORNER_EXPONENT as f32,
+                                                        true,
                                                     );
                                                 } else {
                                                     blur.render_captured_blur(

@@ -387,6 +387,28 @@ impl WindowShadowPipeline {
         scale: f64,
         alpha: f32,
     ) {
+        self.render_menu_shadow_alpha_with_exponent(
+            gl,
+            projection,
+            menu_rect,
+            corner_radius,
+            4.2,
+            scale,
+            alpha,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_menu_shadow_alpha_with_exponent(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        menu_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        exponent: f32,
+        scale: f64,
+        alpha: f32,
+    ) {
         let a = alpha.clamp(0.0, 1.0);
         if a <= 0.001 {
             return;
@@ -395,11 +417,12 @@ impl WindowShadowPipeline {
         let spread = 0.0f32;
         let offset_y = 6.0 * scale as f32;
         let opacity = 0.15f32 * a;
-        self.render_shadow_with_style(
+        self.render_shadow_with_style_and_exponent(
             gl,
             projection,
             menu_rect,
             corner_radius,
+            exponent,
             blur_radius,
             spread,
             offset_y,
@@ -415,6 +438,34 @@ impl WindowShadowPipeline {
         projection: &[f32; 9],
         win_rect: Rectangle<i32, Physical>,
         corner_radius: f32,
+        blur_radius: f32,
+        spread: f32,
+        offset_y: f32,
+        opacity: f32,
+        contact_strength: f32,
+    ) {
+        self.render_shadow_with_style_and_exponent(
+            gl,
+            projection,
+            win_rect,
+            corner_radius,
+            4.2,
+            blur_radius,
+            spread,
+            offset_y,
+            opacity,
+            contact_strength,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_shadow_with_style_and_exponent(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        exponent: f32,
         blur_radius: f32,
         spread: f32,
         offset_y: f32,
@@ -504,7 +555,7 @@ impl WindowShadowPipeline {
             );
             gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
             gl.Uniform1f(self.u_corner_radius, corner_radius);
-            gl.Uniform1f(self.u_exponent, 4.2f32);
+            gl.Uniform1f(self.u_exponent, exponent);
             gl.Uniform1f(self.u_blur_radius, blur_radius);
             gl.Uniform1f(self.u_spread, spread);
             gl.Uniform1f(self.u_offset_y, offset_y);

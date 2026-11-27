@@ -2334,6 +2334,7 @@ pub fn run_winit() -> Result<()> {
                                             "malus-dock" => dock_radius,
                                             "malus-app-switcher" => 32.0,
                                             "malus-control-center-editor" => 34.0,
+                                            "malus-notification-center" => 38.0,
                                             "malus-lock" => 0.0,
                                             "malus-spotlight-controls"
                                             | "malus-spotlight-input"
@@ -2353,8 +2354,11 @@ pub fn run_winit() -> Result<()> {
                                                     | "malus-spotlight-files"
                                             );
                                             let is_notification = ns == "malus-notifications";
-                                            let is_cc_editor =
-                                                ns == "malus-control-center-editor";
+                                            let is_cc_editor = matches!(
+                                                ns.as_ref(),
+                                                "malus-control-center-editor"
+                                                    | "malus-notification-center"
+                                            );
                                             let with_menu_shadow = is_notification || is_cc_editor;
                                             let phys_rect = if ns == "malus-dock" {
                                                 let root_id =
@@ -2476,11 +2480,12 @@ pub fn run_winit() -> Result<()> {
                                             }
                                         } else if shadow_kind == 1 {
                                             if let Some(shadow) = shadow_pipeline.as_ref() {
-                                                shadow.render_menu_shadow_alpha(
+                                                shadow.render_menu_shadow_alpha_with_exponent(
                                                     gl,
                                                     &projection,
                                                     phys_rect,
                                                     radius,
+                                                    crate::media_keys::NOTIFICATION_CORNER_EXPONENT as f32,
                                                     1.0,
                                                     1.0,
                                                 );
@@ -2493,6 +2498,16 @@ pub fn run_winit() -> Result<()> {
                                                 screen_size,
                                                 phys_rect,
                                                 radius,
+                                            );
+                                        } else if shadow_kind == 1 {
+                                            blur.render_blur_with_exponent(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                                crate::media_keys::NOTIFICATION_CORNER_EXPONENT as f32,
+                                                true,
                                             );
                                         } else {
                                             blur.render_captured_blur(
