@@ -717,9 +717,6 @@ pub fn run_winit() -> Result<()> {
                     let point = pointer.current_location();
                     state.last_pointer_location = Some(point);
                     if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
-                        if !is_pressed {
-                            state.flush_pending_activation_configures();
-                        }
                         return;
                     }
 
@@ -1062,19 +1059,18 @@ pub fn run_winit() -> Result<()> {
                             let was_already_top = state.space.elements().last().map(|w| w == &window).unwrap_or(false);
                             if !was_already_top {
                                 state.space.raise_element(&window, true);
-                                // NOTA: No enviamos send_configure() durante Pressed para evitar que GTK4
-                                // cancele el GtkGestureClick de los botones de título (cerrar/minimizar/maximizar).
                             }
                             if let Some(surface) = window.wl_surface() {
-                                state.defer_activation_configure = true;
-                                if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
-                                    let kb_serial = SERIAL_COUNTER.next_serial();
-                                    keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), kb_serial);
+                                let was_focused =
+                                    keyboard.current_focus().as_ref() == Some(surface.as_ref());
+                                let kb_serial = SERIAL_COUNTER.next_serial();
+                                state.set_keyboard_focus_with_sync(
+                                    Some(surface.clone().into_owned()),
+                                    kb_serial,
+                                );
+                                if !was_focused {
                                     state.notify_active_app(Some(&surface));
-                                } else {
-                                    state.sync_window_activation(Some(surface.as_ref()));
                                 }
-                                state.defer_activation_configure = false;
                             }
 
                             if !has_super && !has_alt && event.button_code() == 0x110 {
@@ -1082,7 +1078,6 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             if (has_super || has_alt) && event.button_code() == 0x110 {
-                                state.flush_pending_activation_configures();
                                 info!("🚀 Atajo Super/Alt + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;
                                 let start_data = smithay::input::pointer::GrabStartData {
@@ -1110,7 +1105,6 @@ pub fn run_winit() -> Result<()> {
 
                             // Si Super o Alt está presionado y es clic derecho (0x111 = BTN_RIGHT): redimensionar ventana directamente desde cualquier punto
                             if (has_super || has_alt) && event.button_code() == 0x111 {
-                                state.flush_pending_activation_configures();
                                 let initial_window_location = loc;
                                 let initial_window_size = window.geometry().size;
 
@@ -1176,11 +1170,9 @@ pub fn run_winit() -> Result<()> {
                             ) {
                                 crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
                                     state.execute_screenshot_ui_action();
-                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
-                                    state.flush_pending_activation_configures();
                                     return;
                                 }
                                 crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
@@ -1200,16 +1192,13 @@ pub fn run_winit() -> Result<()> {
                             {
                                 state.update_spotlight_drag_dock_hover(point);
                                 state.handle_spotlight_pointer_release(output_geo, outcome);
-                                state.flush_pending_activation_configures();
                                 return;
                             }
                         }
                         if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
-                            state.flush_pending_activation_configures();
                             return;
                         }
                         if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
-                            state.flush_pending_activation_configures();
                             return;
                         }
                         if event.button_code() == 0x110 && !pointer.is_grabbed() {
@@ -1233,9 +1222,6 @@ pub fn run_winit() -> Result<()> {
                         state.snap_preview = None;
                     }
                     pointer.frame(&mut state);
-                    if !is_pressed {
-                        state.flush_pending_activation_configures();
-                    }
                 }
                 InputEvent::PointerAxis { event } => {
                     if let Some(vertical) = event.amount(Axis::Vertical) {

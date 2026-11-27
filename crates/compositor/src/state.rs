@@ -296,10 +296,6 @@ pub struct MalusState {
     pub active_popups: Vec<PopupSurface>,
     /// Grab explícito (`xdg_popup.grab`) activo de un popup de ventana de aplicación.
     pub popup_grab: Option<PopupGrab<MalusState>>,
-    /// Evita enviar `xdg_toplevel.configure` de activación durante `ButtonState::Pressed` para no cancelar gestos en GTK4.
-    pub defer_activation_configure: bool,
-    /// Superficies cuyo `xdg_toplevel.configure` de activación quedó diferido hasta `ButtonState::Released`.
-    pub pending_activation_configures: Vec<WlSurface>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     /// Ventanas normales ya posicionadas en el centro del área útil tras su primer `commit` válido.
@@ -1855,8 +1851,6 @@ impl MalusState {
             popups: PopupManager::default(),
             active_popups: Vec::new(),
             popup_grab: None,
-            defer_activation_configure: false,
-            pending_activation_configures: Vec::new(),
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
             initially_placed_windows: HashSet::new(),
@@ -3211,8 +3205,7 @@ impl MalusState {
         }
     }
 
-    /// Sincroniza el estado `Activated` de las ventanas en `Space`, difiriendo el `send_configure()`
-    /// de activación cuando estamos en medio de `ButtonState::Pressed`.
+    /// Sincroniza inmediatamente el estado `Activated` de todas las ventanas en `Space`.
     pub fn sync_window_activation(&mut self, focused: Option<&WlSurface>) {
         for win in self.space.elements() {
             let is_focused = focused
@@ -3225,18 +3218,8 @@ impl MalusState {
             // `xdg_toplevel.configure` de activación o desactivación.
             win.set_activated(is_focused);
             if let Some(toplevel) = win.toplevel() {
-                let surf = toplevel.wl_surface().clone();
-                if !is_focused {
-                    self.pending_activation_configures.retain(|s| s != &surf);
-                }
                 if toplevel.has_pending_changes() {
-                    if self.defer_activation_configure && is_focused {
-                        if !self.pending_activation_configures.contains(&surf) {
-                            self.pending_activation_configures.push(surf);
-                        }
-                    } else {
-                        let _ = toplevel.send_pending_configure();
-                    }
+                    let _ = toplevel.send_pending_configure();
                 }
             }
         }
@@ -3399,29 +3382,6 @@ impl MalusState {
         // Garantizar siempre la sincronización de `Activated` incluso si `kb.set_focus`
         // no disparó `SeatHandler::focus_changed` (foco `None` o igual al foco previo).
         self.sync_window_activation(focus.as_ref());
-    }
-
-    /// Envía los `xdg_toplevel.configure` de activación que fueron diferidos durante `ButtonState::Pressed`.
-    pub fn flush_pending_activation_configures(&mut self) {
-        if self.pending_activation_configures.is_empty() {
-            return;
-        }
-        use smithay::utils::IsAlive;
-        let pending: Vec<WlSurface> = self.pending_activation_configures.drain(..).collect();
-        for surf in pending {
-            if !surf.alive() {
-                continue;
-            }
-            if let Some(win) = self
-                .space
-                .elements()
-                .find(|w| w.wl_surface().as_deref() == Some(&surf))
-            {
-                if let Some(toplevel) = win.toplevel() {
-                    let _ = toplevel.send_pending_configure();
-                }
-            }
-        }
     }
 
     /// Indica si hay un grab explícito de popup (`xdg_popup.grab`) todavía vigente.
@@ -7799,9 +7759,13 @@ impl CompositorHandler for MalusState {
                     } else {
                         layer.layer_surface().send_pending_configure();
                     }
-                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay
-                        && layer.can_receive_keyboard_focus()
-                    {
+                    let kb_interactivity = layer.cached_state().keyboard_interactivity;
+                    if should_auto_focus_overlay_layer(
+                        layer.layer(),
+                        kb_interactivity,
+                        layer.namespace(),
+                        !initial_configure_sent,
+                    ) {
                         should_focus_overlay = Some(layer.wl_surface().clone());
                     }
                 }
@@ -7813,11 +7777,15 @@ impl CompositorHandler for MalusState {
             }
 
             if let Some(focus_surf) = should_focus_overlay {
-                if let Some(kb) = self.seat.get_keyboard() {
-                    if kb.current_focus().as_ref() != Some(&focus_surf) {
-                        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                        kb.set_focus(self, Some(focus_surf), serial);
-                    }
+                let already_focused = self
+                    .seat
+                    .get_keyboard()
+                    .and_then(|kb| kb.current_focus())
+                    .as_ref()
+                    == Some(&focus_surf);
+                if !already_focused {
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    self.set_keyboard_focus_with_sync(Some(focus_surf), serial);
                 }
             }
         }
@@ -8281,7 +8249,6 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
-        self.flush_pending_activation_configures();
         self.ssd.grab_active = true;
         self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
@@ -8341,7 +8308,6 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
-        self.flush_pending_activation_configures();
         self.ssd.grab_active = true;
         self.ssd.cursor_override = true;
         self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
@@ -9200,6 +9166,31 @@ impl SessionLockHandler for MalusState {
 }
 
 delegate_session_lock!(MalusState);
+
+/// Determina si una `LayerSurface` que acaba de hacer `commit` debe recibir foco de teclado
+/// automáticamente:
+/// - `KeyboardInteractivity::Exclusive` en `Layer::Overlay` siempre recibe foco (lockscreen,
+///   herramientas de captura).
+/// - `KeyboardInteractivity::OnDemand` en `Layer::Overlay` solo recibe foco en su mapeo inicial
+///   (p. ej. Centro de Control para soportar Escape al abrirse), pero nunca en commits posteriores
+///   ni jamás para `malus-top-bar` (evitando robar el foco a la ventana activa cuando la barra
+///   actualiza el título o el menú global).
+pub(crate) fn should_auto_focus_overlay_layer(
+    layer: Layer,
+    keyboard_interactivity: smithay::wayland::shell::wlr_layer::KeyboardInteractivity,
+    namespace: &str,
+    is_initial_map: bool,
+) -> bool {
+    use smithay::wayland::shell::wlr_layer::KeyboardInteractivity;
+    if layer != Layer::Overlay {
+        return false;
+    }
+    match keyboard_interactivity {
+        KeyboardInteractivity::Exclusive => true,
+        KeyboardInteractivity::OnDemand => is_initial_map && namespace != "malus-top-bar",
+        KeyboardInteractivity::None => false,
+    }
+}
 
 fn should_skip_black_hole_for_app_id(app_id: Option<&str>) -> bool {
     let Some(id) = app_id else {
@@ -10810,9 +10801,67 @@ mod tests {
     #[test]
     fn activation_sync_uses_has_pending_changes_and_move_request_validates_serial() {
         let state_src = include_str!("state.rs");
+        let drm_src = include_str!("backend/drm.rs");
+        let winit_src = include_str!("backend/winit.rs");
         assert!(state_src.contains("if toplevel.has_pending_changes()"));
         assert!(state_src.contains("toplevel.send_pending_configure()"));
         assert!(state_src.contains("if !pointer.has_grab(serial)"));
         assert!(state_src.contains("fn is_window_visually_active("));
+        assert!(!drm_src.contains("defer_activation_configure"));
+        assert!(!winit_src.contains("defer_activation_configure"));
+    }
+
+    #[test]
+    fn overlay_auto_focus_never_steals_focus_on_ondemand_redraws() {
+        use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
+
+        // `malus-top-bar` en modo Overlay (auto_hide_mode = "Nunca") nunca debe robar foco
+        // ni en el mapeo inicial ni al redibujar tras ActiveAppChanged / reloj.
+        assert!(!super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::OnDemand,
+            "malus-top-bar",
+            true,
+        ));
+        assert!(!super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::OnDemand,
+            "malus-top-bar",
+            false,
+        ));
+
+        // El Centro de Control recibe foco al abrirse (para Escape), pero nunca al repintar después.
+        assert!(super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::OnDemand,
+            "malus-control-center",
+            true,
+        ));
+        assert!(!super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::OnDemand,
+            "malus-control-center",
+            false,
+        ));
+
+        // Capas Exclusive (pantalla de bloqueo, barra de captura) siempre reciben foco.
+        assert!(super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::Exclusive,
+            "malus-lock",
+            false,
+        ));
+        assert!(!super::should_auto_focus_overlay_layer(
+            Layer::Top,
+            KeyboardInteractivity::Exclusive,
+            "malus-top-bar",
+            true,
+        ));
+        assert!(!super::should_auto_focus_overlay_layer(
+            Layer::Overlay,
+            KeyboardInteractivity::None,
+            "malus-notifications",
+            true,
+        ));
     }
 }

@@ -355,7 +355,6 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
     fn unset(&mut self, data: &mut MalusState) {
         data.ssd.grab_active = false;
         data.ssd.cursor_override = false;
-        data.flush_pending_activation_configures();
     }
 }
 
@@ -821,7 +820,6 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
     fn unset(&mut self, data: &mut MalusState) {
         data.ssd.grab_active = false;
-        data.flush_pending_activation_configures();
     }
 }
 
