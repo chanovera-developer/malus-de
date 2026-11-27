@@ -841,6 +841,27 @@ pub fn show_capture_preview_flow(
             malus_de_common::config::load_accent_color_index(),
         ));
 
+        let reduce_transparency = malus_de_common::config::load_reduce_transparency();
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        let ql_alpha = if reduce_transparency {
+            0.97
+        } else {
+            malus_de_common::config::scaled_liquid_glass_alpha(0.72, glass_scale, 0.16, 0.94)
+        };
+        let outer_r = malus_de_common::config::DisplaysConfig::load()
+            .window_corner_radius
+            .clamp(0.0, 48.0);
+        let inner_r = if outer_r <= 0.5 {
+            0.0
+        } else {
+            (outer_r - 8.0).max(8.0)
+        };
+        let dynamic_ql_provider = CssProvider::new();
+        dynamic_ql_provider.load_from_string(&format!(
+            "window.branches-quicklook-window .branches-quicklook-container {{ background-color: alpha(@window_bg_color, {ql_alpha:.3}); }}\n\
+             .branches-quicklook-image-frame, .branches-quicklook-image, .branches-quicklook-video-stage {{ border-radius: {inner_r:.1}px; }}\n"
+        ));
+
         if let Some(display) = gdk::Display::default() {
             let icon_theme = gtk4::IconTheme::for_display(&display);
             for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
@@ -857,6 +878,11 @@ pub fn show_capture_preview_flow(
                 &display,
                 &thumb_provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+            );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &dynamic_ql_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
             );
             gtk4::style_context_add_provider_for_display(
                 &display,
@@ -1084,6 +1110,7 @@ struct ImageViewSlot {
     picture: Picture,
     img_frame: Overlay,
     size_spacer: GtkBox,
+    live_text: Option<malus_de_common::live_text::LiveTextController>,
 }
 
 /// Ventana de previsualización idéntica a Quick Look en Branches (`crates/branches/src/quick_look.rs`):
@@ -1167,18 +1194,15 @@ fn open_preview_editor_window(
         .application(application)
         .title(&title_name)
         .decorated(false)
+        .resizable(false)
         .css_classes(["branches-quicklook-window"])
-        .default_width(init_w + 32)
-        .default_height(init_h + 32)
+        .default_width(init_w)
+        .default_height(init_h)
         .build();
 
     let root_box = GtkBox::new(Orientation::Vertical, 0);
     root_box.add_css_class("branches-quicklook-container");
     root_box.set_overflow(Overflow::Hidden);
-    root_box.set_margin_top(16);
-    root_box.set_margin_bottom(16);
-    root_box.set_margin_start(16);
-    root_box.set_margin_end(16);
 
     let stop_all_media: Rc<dyn Fn()> = {
         let mh = media_handles.clone();
@@ -1235,7 +1259,7 @@ fn open_preview_editor_window(
                         slot.img_frame.set_valign(Align::Center);
                         slot.size_spacer.set_size_request(fit_w, fit_h);
                     }
-                    win.set_default_size(cw + 32, ch + 32);
+                    win.set_default_size(cw, ch);
                 }
             } else if is_exp {
                 card.set_size_request(-1, -1);
@@ -1250,12 +1274,12 @@ fn open_preview_editor_window(
                 let cw = (fit_w + QL_VIDEO_CHROME_W).clamp(QL_MIN_CARD_W.min(mw), mw);
                 let ch = (fit_h + QL_VIDEO_CHROME_H).clamp(QL_MIN_CARD_H.min(mh), mh);
                 card.set_size_request(cw, ch);
-                win.set_default_size(cw + 32, ch + 32);
+                win.set_default_size(cw, ch);
             } else {
                 let cw = mw.clamp(480, 820);
                 let ch = mh.clamp(380, 600);
                 card.set_size_request(cw, ch);
-                win.set_default_size(cw + 32, ch + 32);
+                win.set_default_size(cw, ch);
             }
         })
     };
@@ -1305,7 +1329,6 @@ fn open_preview_editor_window(
     {
         let exp = expanded.clone();
         let win = window.clone();
-        let card = root_box.clone();
         let icon = expand_icon.clone();
         let apply_geo = apply_card_geometry.clone();
         expand_btn.connect_clicked(move |_| {
@@ -1317,17 +1340,9 @@ fn open_preview_editor_window(
                 "view-fullscreen-symbolic"
             }));
             if next {
-                card.set_margin_top(0);
-                card.set_margin_bottom(0);
-                card.set_margin_start(0);
-                card.set_margin_end(0);
                 win.fullscreen();
             } else {
                 win.unfullscreen();
-                card.set_margin_top(16);
-                card.set_margin_bottom(16);
-                card.set_margin_start(16);
-                card.set_margin_end(16);
             }
             apply_geo();
         });
@@ -1851,6 +1866,19 @@ fn open_preview_editor_window(
         img_frame.add_overlay(&markup_canvas);
         img_frame.set_measure_overlay(&markup_canvas, false);
 
+        let live_text = initial_img_dims.and_then(|(iw, ih)| {
+            if iw > 0 && ih > 0 {
+                Some(malus_de_common::live_text::LiveTextController::attach(
+                    &img_frame,
+                    &initial_path,
+                    iw,
+                    ih,
+                ))
+            } else {
+                None
+            }
+        });
+
         stage.append(&img_frame);
         content_holder.append(&stage);
 
@@ -1859,6 +1887,7 @@ fn open_preview_editor_window(
             picture,
             img_frame,
             size_spacer,
+            live_text,
         });
     } else {
         // Reproductor de video embebido estilo Quick Look de Branches
@@ -2065,7 +2094,13 @@ fn open_preview_editor_window(
                 *frame_guard = Some(rotated);
                 dims
             };
-            turns_rot.set((turns_rot.get() + 1) % 4);
+            let next_turns = (turns_rot.get() + 1) % 4;
+            turns_rot.set(next_turns);
+            if let Some(slot) = slot_rot.borrow().as_ref() {
+                if let Some(ref lt) = slot.live_text {
+                    lt.set_rotation_turns(next_turns);
+                }
+            }
             for stroke in strokes_rot.borrow_mut().iter_mut() {
                 for pt in &mut stroke.points {
                     let (nx, ny) = *pt;
@@ -2078,17 +2113,23 @@ fn open_preview_editor_window(
         });
     }
 
-    // Toggle barra de Marcación
+    // Toggle barra de Marcación (pausa Live Text mientras se dibujan anotaciones)
     {
         let bar = markup_bar.clone();
         let enabled = markup_enabled.clone();
         let canvas = markup_canvas.clone();
+        let slot_m = image_slot.clone();
         markup_btn.connect_toggled(move |b| {
             let active = b.is_active();
             enabled.set(active);
             bar.set_visible(active);
             canvas.set_can_target(active);
             canvas.set_cursor_from_name(if active { Some("crosshair") } else { None });
+            if let Some(slot) = slot_m.borrow().as_ref() {
+                if let Some(ref lt) = slot.live_text {
+                    lt.set_interaction_enabled(!active);
+                }
+            }
         });
     }
 
@@ -2136,6 +2177,7 @@ fn open_preview_editor_window(
         let canvas_k = markup_canvas;
         let enabled_k = markup_enabled;
         let entry_k = name_entry.clone();
+        let slot_k = image_slot;
         keys.connect_key_pressed(move |_, key, _, state| {
             let has_mod = state.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
             if !has_mod && key == gdk::Key::Escape {
@@ -2152,6 +2194,23 @@ fn open_preview_editor_window(
             let is_mod = state.intersects(
                 ModifierType::CONTROL_MASK | ModifierType::SUPER_MASK | ModifierType::META_MASK,
             );
+            if is_mod && !entry_k.has_focus() && !enabled_k.get() {
+                if matches!(key, gdk::Key::c | gdk::Key::C) {
+                    if let Some(lt) = slot_k.borrow().as_ref().and_then(|s| s.live_text.as_ref()) {
+                        if lt.copy_selection_or_highlighted() {
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                }
+                if matches!(key, gdk::Key::a | gdk::Key::A) {
+                    if let Some(lt) = slot_k.borrow().as_ref().and_then(|s| s.live_text.as_ref()) {
+                        if lt.has_detected_text() {
+                            lt.select_all();
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                }
+            }
             if is_mod && enabled_k.get() && (key == gdk::Key::z || key == gdk::Key::Z) {
                 strokes_k.borrow_mut().pop();
                 canvas_k.queue_draw();
@@ -2196,9 +2255,9 @@ mod tests {
     fn quicklook_preview_matches_branches_styles_and_adaptive_geometry() {
         assert!(THUMBNAIL_CSS.contains("window.branches-quicklook-window"));
         assert!(THUMBNAIL_CSS.contains(".branches-quicklook-container"));
-        assert!(THUMBNAIL_CSS.contains("border-radius: 20px;"));
-        assert!(THUMBNAIL_CSS.contains(".branches-quicklook-container.ql-open"));
-        assert!(THUMBNAIL_CSS.contains(".branches-quicklook-container.ql-closing"));
+        assert!(THUMBNAIL_CSS.contains("background-color: alpha(@window_bg_color, 0.72);"));
+        assert!(THUMBNAIL_CSS.contains("window.branches-quicklook-window .branches-quicklook-container.ql-open"));
+        assert!(THUMBNAIL_CSS.contains("window.branches-quicklook-window .branches-quicklook-container.ql-closing"));
         assert!(THUMBNAIL_CSS.contains(".branches-quicklook-header"));
         assert!(THUMBNAIL_CSS.contains("min-height: 42px;"));
         assert!(THUMBNAIL_CSS.contains("button.branches-quicklook-hud-btn"));

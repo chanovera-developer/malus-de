@@ -1104,6 +1104,7 @@ struct ImageViewSlot {
     picture: Picture,
     img_frame: Overlay,
     size_spacer: GtkBox,
+    live_text: Option<malus_de_common::live_text::LiveTextController>,
 }
 
 pub struct QuickLook {
@@ -1455,6 +1456,9 @@ impl QuickLook {
             let tex = rotated.to_texture();
             slot.picture.set_paintable(Some(&tex));
             *frame_guard = Some(rotated);
+            if let Some(ref lt) = slot.live_text {
+                lt.rotate_ccw();
+            }
             dims
         };
         self.content_sizing.set(QuickLookContentSizing::Image {
@@ -1462,6 +1466,27 @@ impl QuickLook {
             height: new_dims.1,
         });
         self.apply_card_geometry();
+    }
+
+    pub fn copy_live_text(&self) -> bool {
+        self.image_slot
+            .borrow()
+            .as_ref()
+            .and_then(|s| s.live_text.as_ref())
+            .is_some_and(|lt| lt.copy_selection_or_highlighted())
+    }
+
+    pub fn select_all_live_text(&self) -> bool {
+        let slot_opt = self.image_slot.borrow();
+        let Some(lt) = slot_opt.as_ref().and_then(|s| s.live_text.as_ref()) else {
+            return false;
+        };
+        if lt.has_detected_text() {
+            lt.select_all();
+            true
+        } else {
+            false
+        }
     }
 
     pub fn update_if_open(self: &Rc<Self>, item: &FileItem) {
@@ -1569,6 +1594,15 @@ impl QuickLook {
         let self_key = self.clone();
         key_controller.connect_key_pressed(move |_, keyval, _, state| {
             let has_mod = state.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
+            let is_copy_mod = state.intersects(
+                ModifierType::CONTROL_MASK | ModifierType::SUPER_MASK | ModifierType::META_MASK,
+            );
+            if is_copy_mod && matches!(keyval, Key::c | Key::C) && self_key.copy_live_text() {
+                return glib::Propagation::Stop;
+            }
+            if is_copy_mod && matches!(keyval, Key::a | Key::A) && self_key.select_all_live_text() {
+                return glib::Propagation::Stop;
+            }
             if !has_mod && matches!(keyval, Key::space | Key::KP_Space | Key::Escape) {
                 self_key.close();
                 return glib::Propagation::Stop;
@@ -2506,6 +2540,15 @@ fn create_image_preview_from_frame(
     picture.add_css_class("branches-quicklook-image");
     img_frame.add_overlay(&picture);
     img_frame.set_measure_overlay(&picture, false);
+    let live_text = dims.and_then(|(w, h)| {
+        if w > 0 && h > 0 {
+            Some(malus_de_common::live_text::LiveTextController::attach(
+                &img_frame, path, w, h,
+            ))
+        } else {
+            None
+        }
+    });
     stage.append(&img_frame);
 
     *image_slot.borrow_mut() = Some(ImageViewSlot {
@@ -2513,6 +2556,7 @@ fn create_image_preview_from_frame(
         picture,
         img_frame,
         size_spacer,
+        live_text,
     });
 
     if let Some((w, h)) = dims {

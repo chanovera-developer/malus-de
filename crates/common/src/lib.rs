@@ -11,6 +11,8 @@ pub mod folder_icon;
 #[cfg(feature = "gtk-ui")]
 pub mod icon_selection;
 pub mod ipc;
+#[cfg(feature = "gtk-ui")]
+pub mod live_text;
 pub mod logging;
 #[cfg(feature = "gtk-ui")]
 pub mod mac_switch;

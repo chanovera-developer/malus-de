@@ -3379,6 +3379,18 @@ impl BranchesWindow {
             let is_shift = state.contains(gdk::ModifierType::SHIFT_MASK);
 
             if bw.quick_look.is_open() {
+                if (is_ctrl || is_command)
+                    && matches!(keyval, gdk::Key::c | gdk::Key::C)
+                    && bw.quick_look.copy_live_text()
+                {
+                    return glib::Propagation::Stop;
+                }
+                if (is_ctrl || is_command)
+                    && matches!(keyval, gdk::Key::a | gdk::Key::A)
+                    && bw.quick_look.select_all_live_text()
+                {
+                    return glib::Propagation::Stop;
+                }
                 if !is_ctrl
                     && !is_alt
                     && matches!(
