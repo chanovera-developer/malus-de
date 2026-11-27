@@ -422,6 +422,7 @@ fn capture_window_offscreen(
                 win_phys_r,
                 should_round,
                 is_firefox,
+                false,
                 None,
             );
             let _ = frame.finish().map_err(|error| {

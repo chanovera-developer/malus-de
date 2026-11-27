@@ -105,14 +105,19 @@ void main() {
         float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
         float dist = squircle_sdf(p, half_size, effective_r, u_exponent);
 
-        // Suavizado subpixel analítico (anti-aliasing nítido y libre de artefactos a 1px físico).
-        // Cuando `u_preserve_outside > 0.5` (Dock con headroom), no atenuar el interior (`dist <= 0.0`):
-        // de lo contrario la transición en `dist in [-edge_aa, 0]` dibuja una línea invisible de 1 px
-        // justo en el borde superior donde los iconos con zoom cruzan hacia el headroom.
+        // Suavizado subpixel centrado en el contorno real (`dist = 0.0`):
+        // - En los 4 bordes rectos alineados a píxeles físicos, el píxel exterior dentro de la
+        //   ventana tiene `dist = -0.5` -> `smoothstep(-0.5, 0.5, -0.5) == 0.0` -> `mask = 1.0`
+        //   (100% opaco, eliminando la línea semitransparente de 1 px contra el escritorio).
+        // - El primer píxel fuera de la ventana (`dist = +0.5`, p. ej. sombras CSD) obtiene
+        //   `mask = 0.0` (recorte limpio).
+        // - En las 4 esquinas curvas, `dist` varía suavemente en `(-0.5, 0.5)` manteniendo el
+        //   anti-aliasing analítico continuo.
+        // Cuando `u_preserve_outside > 0.5` (Dock con headroom), no atenuar el interior (`dist <= 0.0`).
         float edge_aa = 1.0;
         float mask = (u_preserve_outside > 0.5)
             ? (1.0 - smoothstep(0.0, edge_aa, dist))
-            : (1.0 - smoothstep(-edge_aa, 0.0, dist));
+            : (1.0 - smoothstep(-0.5, 0.5, dist));
 
         // Fino bisel reflectante continuo estilo macOS (1px en el contorno exterior)
         float border_mask = smoothstep(-1.2 - edge_aa, -1.2, dist);
@@ -533,6 +538,7 @@ pub fn render_window_elements(
     win_phys_r: Option<i32>,
     should_round: bool,
     is_firefox: bool,
+    is_maximized: bool,
     transition_clip: Option<Rectangle<i32, Physical>>,
 ) {
     let scale_f = Scale::from(scale);
@@ -607,6 +613,7 @@ pub fn render_window_elements(
     if should_round {
         let clip_radius = if shader.is_some() { win_phys_r } else { None };
         let unified_tree_clip = is_firefox || ssd_elem.is_some();
+        let outer_border_strength = if is_maximized { 0.0 } else { 1.0 };
 
         for elem in win_elems.iter().rev() {
             let clip_params = clip_radius.and_then(|r| {
@@ -616,7 +623,7 @@ pub fn render_window_elements(
                         clip_target_rect.loc.x - elem_geo.loc.x,
                         clip_target_rect.loc.y - elem_geo.loc.y,
                     ));
-                    Some((sub_offset, clip_target_rect.size, r, 1.0))
+                    Some((sub_offset, clip_target_rect.size, r, outer_border_strength))
                 } else {
                     let is_root = elem.id() == root_id;
                     if is_root || should_clip_subsurface_to_window(elem_geo, clip_target_rect) {
@@ -625,7 +632,7 @@ pub fn render_window_elements(
                             clip_target_rect.loc.y - elem_geo.loc.y,
                         ));
                         let border_strength = if is_root || elem_geo == clip_target_rect {
-                            1.0
+                            outer_border_strength
                         } else {
                             0.0
                         };
@@ -644,7 +651,16 @@ pub fn render_window_elements(
                     let tb_geo = tb_elem.geometry(Scale::from(1.0));
                     let sub_offset =
                         Point::from((win_rect.loc.x - tb_geo.loc.x, win_rect.loc.y - tb_geo.loc.y));
-                    sh.apply_to_frame(frame, tb_geo.size, sub_offset, win_rect.size, r);
+                    sh.apply_surface_to_frame(
+                        frame,
+                        None,
+                        tb_geo.size,
+                        sub_offset,
+                        win_rect.size,
+                        r,
+                        outer_border_strength,
+                        false,
+                    );
                     let _ =
                         draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
                     frame.clear_tex_program_override();
@@ -971,5 +987,13 @@ mod tests {
             Rectangle::new((820, 160).into(), (340, 420).into()),
             win,
         ));
+    }
+
+    #[test]
+    fn test_squircle_shader_uses_centered_aa_for_opaque_straight_edges() {
+        assert!(
+            WINDOW_SQUIRCLE_FRAG_SRC.contains("1.0 - smoothstep(-0.5, 0.5, dist)"),
+            "El shader squircle debe centrar el AA en [-0.5, 0.5] para que el borde recto (dist=-0.5) sea 100% opaco"
+        );
     }
 }

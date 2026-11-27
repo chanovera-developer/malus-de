@@ -6332,7 +6332,7 @@ pub fn run_drm() -> Result<()> {
                                         is_translucent,
                                         transition_clip,
                                         ssd_elem,
-                                        _is_maximized,
+                                        is_maximized,
                                         is_branches,
                                         is_full_translucent,
                                     ),
@@ -6502,6 +6502,7 @@ pub fn run_drm() -> Result<()> {
                                             win_phys_r,
                                             *should_round,
                                             *is_firefox,
+                                            *is_maximized,
                                             *transition_clip,
                                         );
                                     }

@@ -534,6 +534,7 @@ pub fn capture_closing_window_texture(
                 clip_r_for_surface,
                 should_round_surface,
                 pending.is_firefox,
+                false,
                 None,
             );
         } else {
