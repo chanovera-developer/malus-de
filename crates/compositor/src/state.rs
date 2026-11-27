@@ -7175,10 +7175,28 @@ impl MalusState {
         let zone = layer_map.non_exclusive_zone();
 
         // En Malus DE, la Top Bar solo existe en la pantalla primaria.
-        // En la pantalla primaria ocupa de manera estricta al menos 36 píxeles lógicos superiores.
-        // En pantallas secundarias no hay Top Bar, por lo que no se impone margen superior artificial.
+        // Reserva al menos 36 px salvo que la Top Bar esté mapeada con `exclusive_zone = 0`
+        // (modo de ocultación automática) para permitir que las ventanas lleguen al borde superior.
         let is_primary = self.is_primary_output(output);
-        let top_bar_min_height = if is_primary { 36 } else { 0 };
+        let top_bar_auto_hide = layer_map
+            .layers()
+            .find(|layer| layer.namespace() == "malus-top-bar")
+            .is_some_and(|layer| {
+                smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
+                    let mut guard = states
+                        .cached_state
+                        .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceCachedState>();
+                    matches!(
+                        guard.current().exclusive_zone,
+                        smithay::wayland::shell::wlr_layer::ExclusiveZone::Neutral
+                    )
+                })
+            });
+        let top_bar_min_height = if is_primary && !top_bar_auto_hide {
+            36
+        } else {
+            0
+        };
         let top_offset = if zone.size.w > 0 && zone.size.h > 0 {
             if is_primary {
                 zone.loc.y.max(top_bar_min_height)
@@ -7758,9 +7776,11 @@ impl CompositorHandler for MalusState {
 
         if let Some(output) = target_output {
             let mut should_focus_overlay = None;
-            {
+            let zone_changed = {
                 let mut map = smithay::desktop::layer_map_for_output(&output);
+                let prev_zone = map.non_exclusive_zone();
                 map.arrange();
+                let changed = map.non_exclusive_zone() != prev_zone;
 
                 if let Some(layer) =
                     map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::TOPLEVEL)
@@ -7785,6 +7805,11 @@ impl CompositorHandler for MalusState {
                         should_focus_overlay = Some(layer.wl_surface().clone());
                     }
                 }
+                changed
+            };
+
+            if zone_changed && self.auto_tiling_enabled {
+                self.relayout_auto_tiling();
             }
 
             if let Some(focus_surf) = should_focus_overlay {

@@ -331,29 +331,6 @@ pub fn create_menubar_pane(
     // ------------------------------------------------------------------------
     let top_card = GtkBox::builder().orientation(Orientation::Vertical).build();
 
-    let (auto_hide_row, set_auto_hide_idx) = build_dropdown_row(
-        "Ocultar y mostrar la barra de menús automáticamente",
-        &AUTO_HIDE_OPTIONS,
-        cfg.borrow().auto_hide_mode as usize,
-        {
-            let cfg_c = cfg.clone();
-            let sync_c = syncing.clone();
-            move |idx| {
-                if sync_c.get() {
-                    return;
-                }
-                let mut b = cfg_c.borrow_mut();
-                b.auto_hide_mode = idx as u8;
-                save_menubar_and_reload(&b);
-            }
-        },
-    );
-    sync_hooks.borrow_mut().push(Box::new(move |c| {
-        set_auto_hide_idx(c.auto_hide_mode as usize);
-    }));
-    top_card.append(&auto_hide_row);
-    top_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-
     let (bg_row, bg_sw) = build_switch_row(
         "Mostrar fondo de la barra de menús",
         cfg.borrow().show_background,
@@ -370,9 +347,41 @@ pub fn create_menubar_pane(
             }
         },
     );
+
+    let (auto_hide_row, set_auto_hide_idx) = build_dropdown_row(
+        "Ocultar y mostrar la barra de menús automáticamente",
+        &AUTO_HIDE_OPTIONS,
+        cfg.borrow().auto_hide_mode as usize,
+        {
+            let cfg_c = cfg.clone();
+            let sync_c = syncing.clone();
+            let bg_sw_c = bg_sw.clone();
+            move |idx| {
+                if sync_c.get() {
+                    return;
+                }
+                let mode = idx as u8;
+                let auto_hides = matches!(mode, 1 | 2);
+                let mut b = cfg_c.borrow_mut();
+                b.auto_hide_mode = mode;
+                if auto_hides && !b.show_background {
+                    b.show_background = true;
+                    sync_c.set(true);
+                    bg_sw_c.set_active(true);
+                    sync_c.set(false);
+                }
+                save_menubar_and_reload(&b);
+            }
+        },
+    );
+    sync_hooks.borrow_mut().push(Box::new(move |c| {
+        set_auto_hide_idx(c.auto_hide_mode as usize);
+    }));
     sync_hooks.borrow_mut().push(Box::new(move |c| {
         bg_sw.set_active(c.show_background);
     }));
+    top_card.append(&auto_hide_row);
+    top_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     top_card.append(&bg_row);
     top_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 

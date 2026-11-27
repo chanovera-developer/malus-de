@@ -79,6 +79,11 @@ fn build_topbar_glass_css(opacity: f64, show_background: bool) -> String {
             "window.malus-topbar, \
              window.malus-topbar.background, \
              window.malus-topbar decoration {{ \
+                 background: transparent; \
+                 background-color: transparent; \
+                 border-bottom: none; \
+             }} \
+             window.malus-topbar .topbar-content {{ \
                  background-image: none; \
                  background-color: alpha(@window_bg_color, {bar_a:.3}); \
                  border-bottom: 1px solid alpha(@borders, 0.22); \
@@ -122,7 +127,8 @@ fn build_topbar_glass_css(opacity: f64, show_background: bool) -> String {
     } else {
         "window.malus-topbar, \
          window.malus-topbar.background, \
-         window.malus-topbar decoration { \
+         window.malus-topbar decoration, \
+         window.malus-topbar .topbar-content { \
              background: transparent; \
              background-color: transparent; \
              border-bottom: none; \
@@ -290,7 +296,7 @@ fn build_ui(app: &Application) {
     let root_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .css_classes(["topbar-content"])
-        .valign(gtk4::Align::Center)
+        .valign(gtk4::Align::Fill)
         .spacing(8)
         .build();
 
@@ -508,6 +514,8 @@ fn build_ui(app: &Application) {
     let revealer = gtk4::Revealer::builder()
         .transition_type(gtk4::RevealerTransitionType::SlideDown)
         .transition_duration(180)
+        .valign(gtk4::Align::Start)
+        .overflow(gtk4::Overflow::Hidden)
         .reveal_child(true)
         .child(&root_box)
         .build();
@@ -519,8 +527,9 @@ fn build_ui(app: &Application) {
     let sync_bar_vis: std::rc::Rc<dyn Fn()> = {
         let win_c = window.clone();
         let rev_c = revealer.clone();
+        let root_c = root_box.clone();
         let hov_c = bar_hovered.clone();
-        let act_c = has_active_app;
+        let _act_c = has_active_app;
         let last_mode_c = last_applied_mode;
         let last_reg_c = last_input_region;
         let custom_reg_c = has_custom_input_region;
@@ -545,13 +554,15 @@ fn build_ui(app: &Application) {
                 }
                 last_mode_c.set(Some(mode));
             }
+            let menu_open = has_open_topbar_menu(root_c.upcast_ref());
             let should_show = match mode {
-                1 => hov_c.get(),
-                2 => !act_c.get() || hov_c.get(),
+                // 1 = Siempre, 2 = Sólo en el escritorio (auto-oculta fuera de pantalla completa)
+                1 | 2 => hov_c.get() || menu_open,
                 _ => true,
             };
             if rev_c.reveals_child() != should_show {
                 rev_c.set_reveal_child(should_show);
+                win_c.queue_draw();
             }
             // Solo restringir input_region cuando auto-hide está activo o recuperándose de un recorte,
             // y nunca aplicar una región de 1 px antes del layout inicial (width <= 1).
@@ -585,6 +596,15 @@ fn build_ui(app: &Application) {
         *cell.borrow_mut() = Some(sync_bar_vis.clone());
     });
 
+    {
+        let sync_rev = sync_bar_vis.clone();
+        let win_rev = window.clone();
+        revealer.connect_child_revealed_notify(move |_| {
+            sync_rev();
+            win_rev.queue_draw();
+        });
+    }
+
     let motion = gtk4::EventControllerMotion::new();
     {
         let hov_enter = bar_hovered.clone();
@@ -595,11 +615,27 @@ fn build_ui(app: &Application) {
         });
     }
     {
-        let hov_leave = bar_hovered;
+        let hov_leave = bar_hovered.clone();
         let sync_leave = sync_bar_vis.clone();
+        let root_leave = root_box.clone();
         motion.connect_leave(move |_| {
             hov_leave.set(false);
             sync_leave();
+            if has_open_topbar_menu(root_leave.upcast_ref()) {
+                let hov_poll = hov_leave.clone();
+                let sync_poll = sync_leave.clone();
+                let root_poll = root_leave.clone();
+                glib::timeout_add_local(std::time::Duration::from_millis(160), move || {
+                    if hov_poll.get() {
+                        return glib::ControlFlow::Break;
+                    }
+                    if !has_open_topbar_menu(root_poll.upcast_ref()) {
+                        sync_poll();
+                        return glib::ControlFlow::Break;
+                    }
+                    glib::ControlFlow::Continue
+                });
+            }
         });
     }
     window.add_controller(motion);
@@ -607,6 +643,33 @@ fn build_ui(app: &Application) {
     window.set_child(Some(&revealer));
     window.present();
     sync_bar_vis();
+    {
+        let sync_init = sync_bar_vis.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
+            sync_init();
+        });
+    }
+}
+
+fn has_open_topbar_menu(widget: &gtk4::Widget) -> bool {
+    if let Some(mb) = widget.downcast_ref::<gtk4::MenuButton>() {
+        if mb.is_active() {
+            return true;
+        }
+    }
+    if let Some(tb) = widget.downcast_ref::<gtk4::ToggleButton>() {
+        if tb.has_css_class("control-center-toggle") && tb.is_active() {
+            return true;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if has_open_topbar_menu(&c) {
+            return true;
+        }
+        child = c.next_sibling();
+    }
+    false
 }
 
 fn find_primary_gdk_monitor(
