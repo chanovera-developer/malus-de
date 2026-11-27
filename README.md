@@ -58,12 +58,12 @@ curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/a
 
 ## Qué incluye
 
-- Compositor Wayland nativo con Smithay.
+- Compositor Wayland nativo con Smithay y auto-tiling inteligente multi-monitor.
 - Decoraciones de ventanas estilo macOS, barra superior, dock flotante y switcher de apps.
 - Espacios virtuales, exposé/mission control y soporte multi-monitor.
 - Efectos visuales GPU: esquinas squircle, sombra procedural y desenfoque Dual-Kawase.
-- Spotlight, portapapeles, captura de pantalla, fondo de escritorio y configuración nativa.
-- Explorador de archivos tipo Finder y servicios de sesión propios.
+- Canopy (buscador rápido), portapapeles, captura/grabación arrastrable con OCR (`Super + Shift + T`), fondo de escritorio y configuración nativa.
+- Explorador de archivos tipo Finder (Branches), Quick Look Liquid Glass unificado con **Texto en vivo (Live Text)** y servicios de sesión propios.
 
 ## Estado actual
 
@@ -82,7 +82,7 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 
 | Hito | Módulo | Estado | Nota |
 | :--- | :--- | :---: | :--- |
-| M1 | Compositor base | ✅ | Smithay, DRM/KMS, XWayland, sombras, popups squircle (`32px` en bandeja y Dock) y efecto Black Hole. |
+| M1 | Compositor base | ✅ | Smithay, DRM/KMS, XWayland, auto-tiling multi-monitor, sincronización de foco/semáforo, sombras, popups squircle (`32px` en bandeja y Dock) y efecto Black Hole. |
 | M2 | Dock flotante | ✅ | Estilo Tahoe: lupa estable, tooltips con cola curva, menús contextuales squircle `32px`, apps recientes animadas, globos push y progreso de descargas (Chromium/Brave pendiente, ver ADR 0013). |
 | M3 | Menú global y Apple | ✅ | Menú completo, submenús en cascada y diálogos de energía/cierre de sesión estilo Tahoe. |
 | M4 | Centro de control | ✅ | D-Bus, menús de bandeja Tahoe (Wi-Fi, Bluetooth, Sonido con mezclador por app) y controles del sistema. |
@@ -91,8 +91,8 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 | M7 | Sesión GDM nativa | ✅ | Launcher, aislamiento, instalación en release y arranque optimizado sin bloqueos. |
 | M8 | Multi-monitor 4K y teclado | ✅ | Soporte dual 4K, hotplug sin desconexión, brillo por pantalla vía LUT gamma CRTC y XKB latam. |
 | M9 | Portapapeles | ✅ | Historial persistente con búsqueda y fijados. |
-| M10 | Captura y grabación | 🟡 | Captura activa; OCR y ventana individual pendientes. |
-| M11 | Explorador de archivos | 🟡 | Branches casi completo (vistas, etiquetas, *type-ahead*, Quick Look y paridad de menús); faltan ventanas de configuración y vista de galería. |
+| M10 | Captura y grabación | ✅ | Barra interactiva arrastrable (`Super + Shift + 5`), captura completa/área/ventana aislada RGBA transparente (`Espacio`), grabación MP4 H.264/Lossless, OCR de región (`Super + Shift + T`) y Quick Look Liquid Glass unificado con Texto en vivo (Live Text). |
+| M11 | Explorador de archivos | 🟡 | Branches casi completo (vistas, etiquetas, *type-ahead*, Quick Look con Texto en vivo y paridad de menús); faltan ventanas de configuración y vista de galería. |
 | M12 | Ajustes del sistema | ✅ | App nativa con carga diferida; paneles de Apariencia, Pantallas, Fondo, Escritorio y Dock, Barra de menús, Sonido, Notificaciones, Pip/Canopy, Red, Wi-Fi, Bluetooth, VPN, Batería, Accesibilidad y General. |
 | M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
 | M14 | Optimización DRM | ✅ | Idle sleep, caché de fondos/miniaturas y ajustes de rendimiento ya aplicados. |
@@ -130,6 +130,7 @@ Malus DE se prueba principalmente en Fedora 45 y usa una pila moderna de Linux:
 - PipeWire / WirePlumber
 - NetworkManager y BlueZ
 - GTK4 / Libadwaita
+- Tesseract OCR (`spa`/`eng`) para Texto en vivo y captura OCR
 - XWayland para compatibilidad
 - session manager / D-Bus / Polkit
 

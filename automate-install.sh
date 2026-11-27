@@ -122,7 +122,7 @@ PKGS_FEDORA=(
     power-profiles-daemon gvfs udisks2 libcanberra-gtk3
     polkit mate-polkit gnome-keyring gnome-keyring-pam libsecret
     xdg-desktop-portal xdg-desktop-portal-gtk wl-clipboard libnotify pam
-    ptyxis
+    ptyxis tesseract tesseract-langpack-spa
     rust cargo gcc clang pkgconf-pkg-config git curl
     gtk4-devel libadwaita-devel gtk4-layer-shell-devel gdk-pixbuf2-devel
     'pkgconfig(gbm)' libdrm-devel wayland-devel libinput-devel libseat-devel
@@ -136,7 +136,7 @@ PKGS_ARCH=(
     xdg-desktop-portal xdg-desktop-portal-gtk wl-clipboard libcanberra libnotify
     ffmpeg gvfs udisks2 inter-font adwaita-icon-theme gsettings-desktop-schemas
     qt5-wayland qt6-wayland
-    ptyxis
+    ptyxis tesseract tesseract-data-spa tesseract-data-eng
     base-devel rust clang git curl pkgconf
     libdrm wayland libinput libxkbcommon sqlite dbus systemd-libs pam
 )
@@ -148,7 +148,7 @@ PKGS_DEBIAN=(
     xdg-desktop-portal xdg-desktop-portal-gtk wl-clipboard libcanberra-gtk3-module
     libnotify-bin ffmpeg gvfs gvfs-backends udisks2 fonts-inter
     adwaita-icon-theme gsettings-desktop-schemas qtwayland5 qt6-wayland
-    ptyxis
+    ptyxis tesseract-ocr tesseract-ocr-spa
     build-essential cargo rustc clang pkg-config git curl ca-certificates
     libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev libgdk-pixbuf-2.0-dev
     libgbm-dev libdrm-dev libwayland-dev libinput-dev libseat-dev libudev-dev

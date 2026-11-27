@@ -87,6 +87,8 @@ sudo dnf install -y \
     pipewire-utils \
     libcanberra-gtk3 \
     ffmpeg-free \
+    tesseract \
+    tesseract-langpack-spa \
     gvfs \
     udisks2 \
     ptyxis \
@@ -152,6 +154,8 @@ sudo apt install -y \
     libnotify-bin \
     libcanberra-gtk3-module \
     ffmpeg \
+    tesseract-ocr \
+    tesseract-ocr-spa \
     gvfs \
     gvfs-backends \
     udisks2 \
@@ -214,6 +218,9 @@ sudo pacman -S --needed \
     libnotify \
     libcanberra \
     ffmpeg \
+    tesseract \
+    tesseract-data-spa \
+    tesseract-data-eng \
     gvfs \
     udisks2 \
     ptyxis \
